@@ -1,4 +1,5 @@
 ﻿using System;
+using Microsoft.Extensions.Configuration;
 
 namespace ConsoleApplication
 {
@@ -6,7 +7,14 @@ namespace ConsoleApplication
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine("Hello World!");
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile("appsettings.json", true)
+                .Build();
+
+            foreach (var forum in configuration.GetSection("forums").GetChildren()) {
+                Console.WriteLine($"Scanning forum {forum.Key}...");
+            }
+            Console.WriteLine($"Hello World {configuration["name"]}!");
         }
     }
 }
