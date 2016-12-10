@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
@@ -14,11 +15,18 @@ namespace ForumScanner
         Storage Storage { get; }
         HttpClient Client { get; }
 
+        Dictionary<ScanItemType, Regex> IdUrlPattern { get; }
+
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client)
         {
             Configuration = configuration;
             Storage = storage;
             Client = client;
+
+            IdUrlPattern = new Dictionary<ScanItemType, Regex>() {
+                { ScanItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
+                { ScanItemType.Topic, new Regex(Configuration["Topics:IdUrlPattern"]) },
+            };
         }
 
         public async Task Scan()
@@ -33,19 +41,21 @@ namespace ForumScanner
                 await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
-            var forumQueue = new Queue<string>();
-            var forumSet = new HashSet<string>();
-            forumQueue.Enqueue(Configuration["RootUrl"]);
-            forumSet.Add(Configuration["RootUrl"]);
+            var rootScanItem = new ScanItem(ScanItemType.Forum, Configuration["RootUrl"], "");
 
-            var topicSet = new HashSet<string>();
+            var forumQueue = new Queue<ScanItem>();
+            var forumSet = new HashSet<ScanItem>();
+            forumQueue.Enqueue(rootScanItem);
+            forumSet.Add(rootScanItem);
+
+            var topicSet = new HashSet<ScanItem>();
 
             while (forumQueue.Count > 0)
             {
                 var result = await ScanForum(forumQueue.Dequeue());
                 foreach (var forum in result.Forums)
                 {
-                    if (!forumSet.Contains(forum))
+                    if (forum != null && !forumSet.Contains(forum))
                     {
                         forumQueue.Enqueue(forum);
                         forumSet.Add(forum);
@@ -53,7 +63,7 @@ namespace ForumScanner
                 }
                 foreach (var topic in result.Topics)
                 {
-                    if (!topicSet.Contains(topic))
+                    if (topic != null && !topicSet.Contains(topic))
                     {
                         topicSet.Add(topic);
                     }
@@ -67,13 +77,11 @@ namespace ForumScanner
             }
         }
 
-        private async Task<ForumScanResult> ScanForum(string forumUrl)
+        private async Task<ScanResult> ScanForum(ScanItem item)
         {
-            Console.WriteLine(forumUrl);
+            var result = new ScanResult();
 
-            var result = new ForumScanResult();
-
-            var response = await Client.GetAsync(forumUrl);
+            var response = await Client.GetAsync(item.Url);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
@@ -83,8 +91,7 @@ namespace ForumScanner
             {
                 foreach (var forumItem in forumItems)
                 {
-                    var lastUpdated = GetHtmlValue(forumItem, Configuration.GetSection("Forums:LastUpdated"));
-                    result.Forums.Add(GetHtmlValue(forumItem, Configuration.GetSection("Forums:Link")));
+                    result.Forums.Add(await CheckHtmlItem(ScanItemType.Forum, forumItem));
                 }
             }
 
@@ -93,33 +100,49 @@ namespace ForumScanner
             {
                 foreach (var topicItem in topicItems)
                 {
-                    var lastUpdated = GetHtmlValue(topicItem, Configuration.GetSection("Topics:LastUpdated"));
-                    result.Topics.Add(GetHtmlValue(topicItem, Configuration.GetSection("Topics:Link")));
+                    result.Forums.Add(await CheckHtmlItem(ScanItemType.Topic, topicItem));
                 }
             }
 
             return result;
         }
 
-        private async Task ScanTopic(string topicUrl)
+        private async Task<ScanItem> CheckHtmlItem(ScanItemType type, HtmlNode htmlItem)
         {
-            Console.WriteLine(topicUrl);
+            var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
+            var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
+            var id = IdUrlPattern[type].Match(link)?.Groups?[1]?.Value;
+            if (id == null)
+            {
+                return null;
+            }
 
-            var response = await Client.GetAsync(topicUrl);
+            var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", id);
+            if (updated == lastUpdated as string)
+            {
+                return null;
+            }
+
+            return new ScanItem(type, link, updated);
+        }
+
+        private async Task ScanTopic(ScanItem item)
+        {
+            var response = await Client.GetAsync(item.Url);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
-            var messages = document.DocumentNode.SelectNodes(Configuration["Messages:Item"]);
-            foreach (var message in messages)
+            var posts = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
+            foreach (var post in posts)
             {
-                var messageIndex = GetHtmlValue(message, Configuration.GetSection("Messages:Index"));
-                var messageLink = GetHtmlValue(message, Configuration.GetSection("Messages:Link"));
-                var messageReplyLink = GetHtmlValue(message, Configuration.GetSection("Messages:ReplyLink"));
-                var messageDate = GetHtmlValue(message, Configuration.GetSection("Messages:Date"));
-                var messageAuthor = GetHtmlValue(message, Configuration.GetSection("Messages:Author"));
-                var messageBody = GetHtmlValue(message, Configuration.GetSection("Messages:Body"));
-                Console.WriteLine($"Message: {messageIndex} {messageDate} {messageAuthor} {messageLink} {messageBody.Length}");
+                var postIndex = GetHtmlValue(post, Configuration.GetSection("Posts:Index"));
+                var postLink = GetHtmlValue(post, Configuration.GetSection("Posts:Link"));
+                var postReplyLink = GetHtmlValue(post, Configuration.GetSection("Posts:ReplyLink"));
+                var postDate = GetHtmlValue(post, Configuration.GetSection("Posts:Date"));
+                var postAuthor = GetHtmlValue(post, Configuration.GetSection("Posts:Author"));
+                var postBody = GetHtmlValue(post, Configuration.GetSection("Posts:Body"));
+                Console.WriteLine($"Message: {postIndex} {postDate} {postAuthor} {postLink} {postBody.Length}");
             }
         }
 
@@ -147,15 +170,36 @@ namespace ForumScanner
         }
     }
 
-    public class ForumScanResult
+    class ScanResult
     {
-        public List<string> Forums;
-        public List<string> Topics;
+        public List<ScanItem> Forums { get; }
+        public List<ScanItem> Topics { get; }
 
-        public ForumScanResult()
+        public ScanResult()
         {
-            Forums = new List<string>();
-            Topics = new List<string>();
+            Forums = new List<ScanItem>();
+            Topics = new List<ScanItem>();
         }
+    }
+
+    class ScanItem
+    {
+        public ScanItemType Type { get; }
+        public string Url { get; }
+        public string Updated { get; }
+
+        public ScanItem(ScanItemType type, string url, string updated)
+        {
+            Type = type;
+            Url = url;
+            Updated = updated;
+        }
+    }
+
+    enum ScanItemType
+    {
+        Forum,
+        Topic,
+        Post,
     }
 }
