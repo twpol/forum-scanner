@@ -15,7 +15,7 @@ namespace ForumScanner
         Storage Storage { get; }
         HttpClient Client { get; }
 
-        Dictionary<ScanItemType, Regex> IdUrlPattern { get; }
+        Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client)
         {
@@ -23,9 +23,9 @@ namespace ForumScanner
             Storage = storage;
             Client = client;
 
-            IdUrlPattern = new Dictionary<ScanItemType, Regex>() {
-                { ScanItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
-                { ScanItemType.Topic, new Regex(Configuration["Topics:IdUrlPattern"]) },
+            IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
+                { ForumItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
+                { ForumItemType.Topic, new Regex(Configuration["Topics:IdUrlPattern"]) },
             };
         }
 
@@ -41,18 +41,18 @@ namespace ForumScanner
                 await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
-            var rootScanItem = new ScanItem(ScanItemType.Forum, Configuration["RootUrl"], "");
+            var rootScanItem = new ForumItem(ForumItemType.Forum, Configuration["RootUrl"], "");
 
-            var forumQueue = new Queue<ScanItem>();
-            var forumSet = new HashSet<ScanItem>();
+            var forumQueue = new Queue<ForumItem>();
+            var forumSet = new HashSet<ForumItem>();
             forumQueue.Enqueue(rootScanItem);
             forumSet.Add(rootScanItem);
 
-            var topicSet = new HashSet<ScanItem>();
+            var topicSet = new HashSet<ForumItem>();
 
             while (forumQueue.Count > 0)
             {
-                var result = await ScanForum(forumQueue.Dequeue());
+                var result = await GetUpdatedSubForumsAndTopics(forumQueue.Dequeue());
                 foreach (var forum in result.Forums)
                 {
                     if (forum != null && !forumSet.Contains(forum))
@@ -72,16 +72,17 @@ namespace ForumScanner
 
             foreach (var topic in topicSet)
             {
-                await ScanTopic(topic);
+                var posts = await GetNewPosts(topic);
                 break;
             }
         }
 
-        private async Task<ScanResult> ScanForum(ScanItem item)
+        private async Task<ForumItems> GetUpdatedSubForumsAndTopics(ForumItem item)
         {
-            var result = new ScanResult();
+            var result = new ForumItems();
 
-            var response = await Client.GetAsync(item.Url);
+            Console.WriteLine($"  Scanning {item}...");
+            var response = await Client.GetAsync(item.Link);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
@@ -91,7 +92,7 @@ namespace ForumScanner
             {
                 foreach (var forumItem in forumItems)
                 {
-                    result.Forums.Add(await CheckHtmlItem(ScanItemType.Forum, forumItem));
+                    result.Forums.Add(await CheckHtmlItem(ForumItemType.Forum, forumItem));
                 }
             }
 
@@ -100,14 +101,14 @@ namespace ForumScanner
             {
                 foreach (var topicItem in topicItems)
                 {
-                    result.Forums.Add(await CheckHtmlItem(ScanItemType.Topic, topicItem));
+                    result.Topics.Add(await CheckHtmlItem(ForumItemType.Topic, topicItem));
                 }
             }
 
             return result;
         }
 
-        private async Task<ScanItem> CheckHtmlItem(ScanItemType type, HtmlNode htmlItem)
+        private async Task<ForumItem> CheckHtmlItem(ForumItemType type, HtmlNode htmlItem)
         {
             var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
@@ -123,26 +124,45 @@ namespace ForumScanner
                 return null;
             }
 
-            return new ScanItem(type, link, updated);
+            return new ForumItem(type, link, updated);
         }
 
-        private async Task ScanTopic(ScanItem item)
+        private async Task<List<ForumPostItem>> GetNewPosts(ForumItem item)
         {
-            var response = await Client.GetAsync(item.Url);
+            Console.WriteLine($"  Scanning {item}...");
+            var response = await Client.GetAsync(item.Link);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
-            var posts = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
-            foreach (var post in posts)
+            var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
+            foreach (var postItem in postItems)
             {
-                var postIndex = GetHtmlValue(post, Configuration.GetSection("Posts:Index"));
-                var postLink = GetHtmlValue(post, Configuration.GetSection("Posts:Link"));
-                var postReplyLink = GetHtmlValue(post, Configuration.GetSection("Posts:ReplyLink"));
-                var postDate = GetHtmlValue(post, Configuration.GetSection("Posts:Date"));
-                var postAuthor = GetHtmlValue(post, Configuration.GetSection("Posts:Author"));
-                var postBody = GetHtmlValue(post, Configuration.GetSection("Posts:Body"));
-                Console.WriteLine($"Message: {postIndex} {postDate} {postAuthor} {postLink} {postBody.Length}");
+                var post = new ForumPostItem(
+                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Index")),
+                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Link")),
+                    GetHtmlValue(postItem, Configuration.GetSection("Posts:ReplyLink")),
+                    GetHtmlValue<DateTimeOffset>(postItem, Configuration.GetSection("Posts:Date")),
+                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Author")),
+                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Body"))
+                );
+                Console.WriteLine($"    Message: {post.Index} {post.Date} {post.Author} {post.Link} {post.Body.Length}");
+            }
+
+            return new List<ForumPostItem>();
+        }
+
+        private static T GetHtmlValue<T>(HtmlNode node, IConfigurationSection configuration)
+        {
+            var value = GetHtmlValue(node, configuration);
+            switch (typeof(T).FullName)
+            {
+                case "System.String":
+                    return (T)(object)value;
+                case "System.DateTimeOffset":
+                    return (T)(object)DateTimeOffset.Parse(value);
+                default:
+                    throw new InvalidDataException($"Invalid type {typeof(T).FullName} for GetHtmlValue<T>");
             }
         }
 
@@ -170,33 +190,57 @@ namespace ForumScanner
         }
     }
 
-    class ScanResult
+    class ForumItems
     {
-        public List<ScanItem> Forums { get; }
-        public List<ScanItem> Topics { get; }
+        public List<ForumItem> Forums { get; }
+        public List<ForumItem> Topics { get; }
 
-        public ScanResult()
+        public ForumItems()
         {
-            Forums = new List<ScanItem>();
-            Topics = new List<ScanItem>();
+            Forums = new List<ForumItem>();
+            Topics = new List<ForumItem>();
         }
     }
 
-    class ScanItem
+    class ForumItem
     {
-        public ScanItemType Type { get; }
-        public string Url { get; }
+        public ForumItemType Type { get; }
+        public string Link { get; }
         public string Updated { get; }
 
-        public ScanItem(ScanItemType type, string url, string updated)
+        public ForumItem(ForumItemType type, string link, string updated)
         {
             Type = type;
-            Url = url;
+            Link = link;
             Updated = updated;
+        }
+
+        override public string ToString()
+        {
+            return $"{Type} {Link}";
         }
     }
 
-    enum ScanItemType
+    class ForumPostItem : ForumItem
+    {
+        public string Index { get; }
+        public string ReplyLink { get; }
+        public DateTimeOffset Date { get; }
+        public string Author { get; }
+        public string Body { get; }
+
+        public ForumPostItem(string index, string link, string replyLink, DateTimeOffset date, string author, string body)
+            : base(ForumItemType.Post, link, null)
+        {
+            Index = index;
+            ReplyLink = replyLink;
+            Date = date;
+            Author = author;
+            Body = body;
+        }
+    }
+
+    enum ForumItemType
     {
         Forum,
         Topic,
