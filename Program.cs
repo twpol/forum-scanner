@@ -21,7 +21,10 @@ namespace ForumScanner
 
             foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
             {
-                await Forums.Scan(configurationForum, storage, client);
+                var forums = new Forums(configurationForum, storage, client);
+                await forums.Scan();
+                // TODO: Send emails
+                // TODO: Save results
             }
 
             storage.Close();

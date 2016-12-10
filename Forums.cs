@@ -8,30 +8,41 @@ using Microsoft.Extensions.Configuration;
 
 namespace ForumScanner
 {
-    public static class Forums
+    public class Forums
     {
-        public static async Task Scan(IConfigurationSection configuration, Storage storage, HttpClient client)
+        IConfigurationSection Configuration { get; }
+        Storage Storage { get; }
+        HttpClient Client { get; }
+
+        public Forums(IConfigurationSection configuration, Storage storage, HttpClient client)
         {
-            Console.WriteLine($"Scanning forum {configuration.Key}...");
+            Configuration = configuration;
+            Storage = storage;
+            Client = client;
+        }
+
+        public async Task Scan()
+        {
+            Console.WriteLine($"Scanning forum {Configuration.Key}...");
 
             // For some reason the HtmlAgilityPack default is CanOverlap | Empty which means <form> elements never contain anything!
             HtmlNode.ElementsFlags["form"] = HtmlElementFlag.CanOverlap;
 
-            if (configuration["LoginForm:Url"] != null)
+            if (Configuration["LoginForm:Url"] != null)
             {
-                await Forms.LoadAndSubmit(configuration.GetSection("LoginForm"), client);
+                await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
             var forumQueue = new Queue<string>();
             var forumSet = new HashSet<string>();
-            forumQueue.Enqueue(configuration["RootUrl"]);
-            forumSet.Add(configuration["RootUrl"]);
+            forumQueue.Enqueue(Configuration["RootUrl"]);
+            forumSet.Add(Configuration["RootUrl"]);
 
             var topicSet = new HashSet<string>();
 
             while (forumQueue.Count > 0)
             {
-                var result = await ScanForum(configuration, storage, client, forumQueue.Dequeue());
+                var result = await ScanForum(forumQueue.Dequeue());
                 foreach (var forum in result.Forums)
                 {
                     if (!forumSet.Contains(forum))
@@ -51,63 +62,63 @@ namespace ForumScanner
 
             foreach (var topic in topicSet)
             {
-                await ScanTopic(configuration, storage, client, topic);
+                await ScanTopic(topic);
                 break;
             }
         }
 
-        private static async Task<ForumScanResult> ScanForum(IConfigurationSection configuration, Storage storage, HttpClient client, string forumUrl)
+        private async Task<ForumScanResult> ScanForum(string forumUrl)
         {
             Console.WriteLine(forumUrl);
 
             var result = new ForumScanResult();
 
-            var response = await client.GetAsync(forumUrl);
+            var response = await Client.GetAsync(forumUrl);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
-            var forumItems = document.DocumentNode.SelectNodes(configuration["Forums:Item"]);
+            var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"]);
             if (forumItems != null)
             {
                 foreach (var forumItem in forumItems)
                 {
-                    var lastUpdated = GetHtmlValue(forumItem, configuration.GetSection("Forums:LastUpdated"));
-                    result.Forums.Add(GetHtmlValue(forumItem, configuration.GetSection("Forums:Link")));
+                    var lastUpdated = GetHtmlValue(forumItem, Configuration.GetSection("Forums:LastUpdated"));
+                    result.Forums.Add(GetHtmlValue(forumItem, Configuration.GetSection("Forums:Link")));
                 }
             }
 
-            var topicItems = document.DocumentNode.SelectNodes(configuration["Topics:Item"]);
+            var topicItems = document.DocumentNode.SelectNodes(Configuration["Topics:Item"]);
             if (topicItems != null)
             {
                 foreach (var topicItem in topicItems)
                 {
-                    var lastUpdated = GetHtmlValue(topicItem, configuration.GetSection("Topics:LastUpdated"));
-                    result.Topics.Add(GetHtmlValue(topicItem, configuration.GetSection("Topics:Link")));
+                    var lastUpdated = GetHtmlValue(topicItem, Configuration.GetSection("Topics:LastUpdated"));
+                    result.Topics.Add(GetHtmlValue(topicItem, Configuration.GetSection("Topics:Link")));
                 }
             }
 
             return result;
         }
 
-        private static async Task ScanTopic(IConfigurationSection configuration, Storage storage, HttpClient client, string topicUrl)
+        private async Task ScanTopic(string topicUrl)
         {
             Console.WriteLine(topicUrl);
 
-            var response = await client.GetAsync(topicUrl);
+            var response = await Client.GetAsync(topicUrl);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
-            var messages = document.DocumentNode.SelectNodes(configuration["Messages:Item"]);
+            var messages = document.DocumentNode.SelectNodes(Configuration["Messages:Item"]);
             foreach (var message in messages)
             {
-                var messageIndex = GetHtmlValue(message, configuration.GetSection("Messages:Index"));
-                var messageLink = GetHtmlValue(message, configuration.GetSection("Messages:Link"));
-                var messageReplyLink = GetHtmlValue(message, configuration.GetSection("Messages:ReplyLink"));
-                var messageDate = GetHtmlValue(message, configuration.GetSection("Messages:Date"));
-                var messageAuthor = GetHtmlValue(message, configuration.GetSection("Messages:Author"));
-                var messageBody = GetHtmlValue(message, configuration.GetSection("Messages:Body"));
+                var messageIndex = GetHtmlValue(message, Configuration.GetSection("Messages:Index"));
+                var messageLink = GetHtmlValue(message, Configuration.GetSection("Messages:Link"));
+                var messageReplyLink = GetHtmlValue(message, Configuration.GetSection("Messages:ReplyLink"));
+                var messageDate = GetHtmlValue(message, Configuration.GetSection("Messages:Date"));
+                var messageAuthor = GetHtmlValue(message, Configuration.GetSection("Messages:Author"));
+                var messageBody = GetHtmlValue(message, Configuration.GetSection("Messages:Body"));
                 Console.WriteLine($"Message: {messageIndex} {messageDate} {messageAuthor} {messageLink} {messageBody.Length}");
             }
         }
