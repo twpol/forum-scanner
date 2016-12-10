@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "HtmlAgilityPack.NetCore": "1.5.0.1",
+    "Microsoft.Data.SQLite": "1.1.0",
     "Microsoft.Extensions.Configuration": "1.1.0",
     "Microsoft.Extensions.Configuration.Json": "1.1.0"
   },

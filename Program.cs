@@ -16,13 +16,15 @@ namespace ForumScanner
         private static async Task MainAsync(string[] args)
         {
             var configuration = LoadConfiguration();
-
+            var storage = await LoadStorage(configuration);
             var client = CreateHttpClient();
 
-            foreach (var forum in configuration.GetSection("forums").GetChildren())
+            foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
             {
-                await Forums.Scan(client, forum);
+                await Forums.Scan(configurationForum, storage, client);
             }
+
+            storage.Close();
         }
 
         private static IConfigurationRoot LoadConfiguration()
@@ -30,6 +32,16 @@ namespace ForumScanner
             return new ConfigurationBuilder()
                 .AddJsonFile("appsettings.json", true)
                 .Build();
+        }
+
+        private static async Task<Storage> LoadStorage(IConfigurationRoot configuration)
+        {
+            var storage = new Storage(configuration.GetConnectionString("Storage"));
+            await storage.Open();
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId integer NOT NULL UNIQUE, LastModified text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId integer NOT NULL UNIQUE, LastModified text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId integer NOT NULL UNIQUE)");
+            return storage;
         }
 
         private static HttpClient CreateHttpClient()

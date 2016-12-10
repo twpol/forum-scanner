@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
@@ -14,45 +13,34 @@ namespace ForumScanner
     {
         public static async Task LoadAndSubmit(IConfigurationSection configuration, HttpClient client)
         {
-            var url = configuration["url"];
+            var url = configuration["Url"];
+            if (url == null)
+            {
+                return;
+            }
+
             var response = await client.GetAsync(url);
-            Console.WriteLine(response);
 
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
-            foreach (var parseError in document.ParseErrors)
-            {
-                Console.WriteLine($"ParseError: {parseError.Code} l={parseError.Line} lp={parseError.LinePosition} sp={parseError.StreamPosition} reason={parseError.Reason}");
-            }
-
-            var form = document.DocumentNode.SelectSingleNode(configuration["form"]);
-            var formAction = form.Attributes["action"]?.DValue() ?? configuration["url"];
+            var form = document.DocumentNode.SelectSingleNode(configuration["Form"]);
+            var formAction = form.Attributes["action"]?.DValue() ?? configuration["Url"];
             var formMethod = form.Attributes["method"]?.DUValue() ?? "GET";
             var formEncType = form.Attributes["enctype"]?.DLValue() ?? "application/x-www-form-urlencoded";
 
             var formData = GetFormData(configuration, form);
             var formBody = EncodeFormData(formMethod, formEncType, formData);
 
-            Console.WriteLine($"URL:     {url}");
-            Console.WriteLine($"Action:  {formAction}");
-            Console.WriteLine($"Method:  {formMethod}");
-            Console.WriteLine($"EncType: {formEncType}");
-            foreach (var kvp in formData)
-            {
-                Console.WriteLine($"Data:    {kvp.Key}={kvp.Value}");
-            }
-            Console.WriteLine($"Body:    {formBody}");
-
             switch (formMethod)
             {
                 case "GET":
                     formAction += (formAction.Contains("?") ? "&" : "?") + formBody;
-                    Console.WriteLine(await client.GetAsync(formAction));
+                    await client.GetAsync(formAction);
                     break;
                 case "POST":
                     // Do nothing.
-                    Console.WriteLine(await client.PostAsync(formAction, new StringContent(formBody, Encoding.UTF8, formEncType)));
+                    await client.PostAsync(formAction, new StringContent(formBody, Encoding.UTF8, formEncType));
                     break;
                 default:
                     Debug.Fail($"Unsupported form method: {formMethod}");
@@ -62,7 +50,7 @@ namespace ForumScanner
 
         private static Dictionary<string, string> GetFormData(IConfigurationSection configuration, HtmlNode form)
         {
-            var configurationInput = configuration.GetSection("input");
+            var configurationInput = configuration.GetSection("Input");
             var formData = new Dictionary<string, string>();
 
             foreach (var input in form.SelectNodes(".//input[@name] | .//select[@name] | .//textarea[@name]"))
@@ -77,7 +65,7 @@ namespace ForumScanner
                 formData[name] = configurationInput[name] ?? value;
             }
 
-            var submit = form.SelectSingleNode(configuration["submit"]);
+            var submit = form.SelectSingleNode(configuration["Submit"]);
             if (submit.Attributes["name"] != null && submit.Attributes["value"] != null)
             {
                 formData[submit.Attributes["name"].DValue()] = submit.Attributes["value"].DValue();
