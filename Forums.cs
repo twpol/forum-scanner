@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -16,6 +17,8 @@ namespace ForumScanner
         HttpClient Client { get; }
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
+
+        static readonly Regex WhitespacePattern = new Regex(@"\s+");
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client)
         {
@@ -135,21 +138,82 @@ namespace ForumScanner
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
 
+            var forumName = GetHtmlValue(document.DocumentNode, Configuration.GetSection("Posts:ForumName"));
+
             var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
             foreach (var postItem in postItems)
             {
                 var post = new ForumPostItem(
-                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Index")),
+                    GetHtmlValue<int>(postItem, Configuration.GetSection("Posts:Index")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:Link")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:ReplyLink")),
                     GetHtmlValue<DateTimeOffset>(postItem, Configuration.GetSection("Posts:Date")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:Author")),
-                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Body"))
+                    GetHtmlValue<HtmlNode>(postItem, Configuration.GetSection("Posts:Body"))
                 );
-                Console.WriteLine($"    Message: {post.Index} {post.Date} {post.Author} {post.Link} {post.Body.Length}");
+                Console.WriteLine($"    Message #{post.Index} {post.Date} {post.Author} {post.Link} {post.Body.InnerHtml.Length}");
+                Console.WriteLine(GetEmailBody(forumName, post));
             }
 
             return new List<ForumPostItem>();
+        }
+
+        private static string GetEmailBody(string forumName, ForumPostItem post)
+        {
+            return "<!DOCTYPE html>" +
+                "<html>" +
+                    "<head>" +
+                        "<style>" +
+                            "html { font-family: sans-serif; }" +
+                            "p.citation { background: lightgrey; padding: 0.5ex; }" +
+                            "blockquote { border-left: 0.5ex solid lightgrey; padding-left: 1.0ex; }" +
+                            ".email-notifications-footer hr { border: 1px solid grey; }" +
+                            ".email-notifications-footer a { color: grey; }" +
+                        "</style>" +
+                    "</head>" +
+                    "<body>" +
+                        $"{FormatBodyForEmail(post.Body)}" +
+                        "<div class='email-notifications-footer'>" +
+                            "<hr>" +
+                            $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {forumName} (<a href='{post.ReplyLink}'>reply</a>, <a href='{post.Link}'>view in forum</a>)" +
+                        "</div>" +
+                    "</body>" +
+                "</html>";
+        }
+
+        private static string FormatBodyForEmail(HtmlNode body)
+        {
+            // <p class='citation'>
+            //   <a class='snapback' rel='citation' href='...'>
+            //     <img src='...' alt='View Post'>
+            //   </a>
+            //   USER, on DATE - TIME, said:
+            // </p>
+            // <div class="blockquote">
+            //   <div class='quote'>
+            //     Quote body
+            //   </div>
+            // </div>
+            var citations = body.SelectNodes(".//p[@class='citation']/a[@class='snapback']");
+            if (citations != null)
+            {
+                foreach (var node in citations)
+                {
+                    node.Remove();
+                }
+            }
+            var blockquotes = body.SelectNodes(".//div[@class='blockquote' and count(*) = 1 and div[@class='quote']]");
+            if (blockquotes != null)
+            {
+                foreach (var node in blockquotes)
+                {
+                    var blockquote = HtmlNode.CreateNode("<blockquote>");
+                    blockquote.AppendChildren(node.SelectSingleNode("./div[@class='quote']").ChildNodes);
+                    node.ParentNode.ReplaceChild(blockquote, node);
+                }
+            }
+
+            return body.OuterHtml;
         }
 
         private static T GetHtmlValue<T>(HtmlNode node, IConfigurationSection configuration)
@@ -157,10 +221,16 @@ namespace ForumScanner
             var value = GetHtmlValue(node, configuration);
             switch (typeof(T).FullName)
             {
-                case "System.String":
-                    return (T)(object)value;
+                case "HtmlAgilityPack.HtmlNode":
+                    var document = new HtmlDocument();
+                    document.LoadHtml(value);
+                    return (T)(object)document.DocumentNode;
                 case "System.DateTimeOffset":
                     return (T)(object)DateTimeOffset.Parse(value);
+                case "System.Int32":
+                    return (T)(object)int.Parse(value.Replace("#", ""));
+                case "System.String":
+                    return (T)(object)value;
                 default:
                     throw new InvalidDataException($"Invalid type {typeof(T).FullName} for GetHtmlValue<T>");
             }
@@ -173,13 +243,13 @@ namespace ForumScanner
                 switch (type.Key)
                 {
                     case "InnerText":
-                        return node.SelectSingleNode(type.Value).InnerText;
+                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value).InnerText), " ").Trim();
                     case "InnerHtml":
                         return node.SelectSingleNode(type.Value).InnerHtml;
                     case "Attribute":
                         foreach (var attribute in type.GetChildren())
                         {
-                            return node.SelectSingleNode(attribute.Value).Attributes[attribute.Key]?.DValue() ?? $"<default:{attribute.Path}>";
+                            return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value).Attributes[attribute.Key]?.Value ?? $"<default:{attribute.Path}>");
                         }
                         goto default;
                     default:
@@ -223,13 +293,13 @@ namespace ForumScanner
 
     class ForumPostItem : ForumItem
     {
-        public string Index { get; }
+        public int Index { get; }
         public string ReplyLink { get; }
         public DateTimeOffset Date { get; }
         public string Author { get; }
-        public string Body { get; }
+        public HtmlNode Body { get; }
 
-        public ForumPostItem(string index, string link, string replyLink, DateTimeOffset date, string author, string body)
+        public ForumPostItem(int index, string link, string replyLink, DateTimeOffset date, string author, HtmlNode body)
             : base(ForumItemType.Post, link, null)
         {
             Index = index;
