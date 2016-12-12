@@ -73,7 +73,6 @@ namespace ForumScanner
                 foreach (var topicItem in topicItems)
                 {
                     await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
-                    break; // TODO
                 }
             }
 
@@ -119,6 +118,8 @@ namespace ForumScanner
 
         private async Task<HtmlDocument> LoadItem(ForumItem item)
         {
+            // Responses are expected to be around 100 KB, so a 16s delay means about a 50 Kbps.
+            await Task.Delay(16000);
             var response = await Client.GetAsync(item.Link);
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
