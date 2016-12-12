@@ -22,7 +22,7 @@ namespace ForumScanner
             foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
             {
                 var forums = new Forums(configurationForum, storage, client);
-                await forums.Scan();
+                await forums.Process();
                 // TODO: Send emails
                 // TODO: Save results
             }
@@ -43,7 +43,7 @@ namespace ForumScanner
             await storage.Open();
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId integer NOT NULL UNIQUE, Updated text)");
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId integer NOT NULL UNIQUE, Updated text)");
-            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId integer NOT NULL UNIQUE)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId integer NOT NULL UNIQUE, Updated text)");
             return storage;
         }
 

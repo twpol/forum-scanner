@@ -33,9 +33,9 @@ namespace ForumScanner
             };
         }
 
-        public async Task Scan()
+        public async Task Process()
         {
-            Console.WriteLine($"Scanning forum {Configuration.Key}...");
+            Console.WriteLine($"Processing {Configuration.Key}...");
 
             // For some reason the HtmlAgilityPack default is CanOverlap | Empty which means <form> elements never contain anything!
             HtmlNode.ElementsFlags["form"] = HtmlElementFlag.CanOverlap;
@@ -45,63 +45,25 @@ namespace ForumScanner
                 await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
-            var rootScanItem = new ForumItem(ForumItemType.Forum, Configuration["RootUrl"], "");
-
-            var forumQueue = new Queue<ForumItem>();
-            var forumSet = new HashSet<ForumItem>();
-            forumQueue.Enqueue(rootScanItem);
-            forumSet.Add(rootScanItem);
-
-            var topicSet = new HashSet<ForumItem>();
-
-            while (forumQueue.Count > 0)
-            {
-                var result = await GetUpdatedSubForumsAndTopics(forumQueue.Dequeue());
-                foreach (var forum in result.Forums)
-                {
-                    if (forum != null && !forumSet.Contains(forum))
-                    {
-                        forumQueue.Enqueue(forum);
-                        forumSet.Add(forum);
-                    }
-                }
-                foreach (var topic in result.Topics)
-                {
-                    if (topic != null && !topicSet.Contains(topic))
-                    {
-                        topicSet.Add(topic);
-                    }
-                }
-            }
-
-            var posts = new List<ForumPostItem>();
-            foreach (var topic in topicSet)
-            {
-                posts.AddRange(await GetNewPosts(topic));
-            }
-
-            foreach (var post in posts)
-            {
-                await SendEmail(post);
-            }
+            await ProcessForum(new ForumItem(ForumItemType.Forum, 0, Configuration["RootUrl"], ""));
         }
 
-        private async Task<ForumItems> GetUpdatedSubForumsAndTopics(ForumItem item)
+        private async Task ProcessForum(ForumItem forum)
         {
-            var result = new ForumItems();
+            if (forum == null)
+            {
+                return;
+            }
 
-            Console.WriteLine($"  Scanning {item}...");
-            var response = await Client.GetAsync(item.Link);
-
-            var document = new HtmlDocument();
-            document.Load(await response.Content.ReadAsStreamAsync());
+            Console.WriteLine($"  Processing {forum}...");
+            var document = await LoadItem(forum);
 
             var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"]);
             if (forumItems != null)
             {
                 foreach (var forumItem in forumItems)
                 {
-                    result.Forums.Add(await CheckHtmlItem(ForumItemType.Forum, forumItem));
+                    await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
                 }
             }
 
@@ -110,19 +72,71 @@ namespace ForumScanner
             {
                 foreach (var topicItem in topicItems)
                 {
-                    result.Topics.Add(await CheckHtmlItem(ForumItemType.Topic, topicItem));
+                    await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
+                    break; // TODO
                 }
             }
 
-            return result;
+            await SetItemUpdated(forum);
         }
 
-        private async Task<ForumItem> CheckHtmlItem(ForumItemType type, HtmlNode htmlItem)
+        private async Task ProcessTopic(ForumItem topic)
+        {
+            if (topic == null)
+            {
+                return;
+            }
+
+            Console.WriteLine($"    Processing {topic}...");
+            var document = await LoadItem(topic);
+
+            var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
+            if (postItems != null)
+            {
+                foreach (var postItem in postItems)
+                {
+                    await ProcessPost(await CheckItemIsUpdated(ForumItemType.Post, postItem));
+                }
+            }
+
+            await SetItemUpdated(topic);
+        }
+
+        private async Task ProcessPost(ForumItem item)
+        {
+            if (item == null || !(item is ForumPostItem))
+            {
+                return;
+            }
+            var post = item as ForumPostItem;
+
+            Console.WriteLine($"      Processing {post}...");
+
+            // Console.WriteLine(GetEmailBody(post));
+
+            await SetItemUpdated(post);
+        }
+
+        private async Task<HtmlDocument> LoadItem(ForumItem item)
+        {
+            var response = await Client.GetAsync(item.Link);
+            var document = new HtmlDocument();
+            document.Load(await response.Content.ReadAsStreamAsync());
+            return document;
+        }
+
+        private async Task<ForumItem> CheckItemIsUpdated(ForumItemType type, HtmlNode htmlItem)
         {
             var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
-            var id = IdUrlPattern[type].Match(link)?.Groups?[1]?.Value;
-            if (id == null)
+            var idString = IdUrlPattern[type].Match(type == ForumItemType.Post ? htmlItem.Attributes["id"].Value : link)?.Groups?[1]?.Value;
+            if (idString == null)
+            {
+                return null;
+            }
+
+            int id;
+            if (!int.TryParse(idString, out id))
             {
                 return null;
             }
@@ -133,62 +147,25 @@ namespace ForumScanner
                 return null;
             }
 
-            return new ForumItem(type, link, updated);
-        }
-
-        private async Task<List<ForumPostItem>> GetNewPosts(ForumItem item)
-        {
-            Console.WriteLine($"  Scanning {item}...");
-            var response = await Client.GetAsync(item.Link);
-
-            var document = new HtmlDocument();
-            document.Load(await response.Content.ReadAsStreamAsync());
-
-            var forumName = GetHtmlValue(document.DocumentNode, Configuration.GetSection("Posts:ForumName"));
-
-            var posts = new List<ForumPostItem>();
-            var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
-            foreach (var postItem in postItems)
+            if (type == ForumItemType.Post)
             {
-                var idString = IdUrlPattern[ForumItemType.Post].Match(postItem.Attributes["id"].Value)?.Groups?[1]?.Value;
-                if (idString == null)
-                {
-                    continue;
-                }
-
-                int id;
-                if (!int.TryParse(idString, out id))
-                {
-                    continue;
-                }
-
-                var lastPostId = await Storage.ExecuteScalarAsync("SELECT PostId FROM Posts WHERE PostId = @Param0", id);
-                if (lastPostId != null)
-                {
-                    continue;
-                }
-
-                posts.Add(new ForumPostItem(
-                    forumName,
+                return new ForumPostItem(
+                    GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
                     id,
-                    GetHtmlValue<int>(postItem, Configuration.GetSection("Posts:Index")),
-                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Link")),
-                    GetHtmlValue(postItem, Configuration.GetSection("Posts:ReplyLink")),
-                    GetHtmlValue<DateTimeOffset>(postItem, Configuration.GetSection("Posts:Date")),
-                    GetHtmlValue(postItem, Configuration.GetSection("Posts:Author")),
-                    GetHtmlValue<HtmlNode>(postItem, Configuration.GetSection("Posts:Body"))
-                ));
+                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
+                    GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
+                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
+                    GetHtmlValue<DateTimeOffset>(htmlItem, Configuration.GetSection("Posts:Date")),
+                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Author")),
+                    GetHtmlValue<HtmlNode>(htmlItem, Configuration.GetSection("Posts:Body"))
+                );
             }
-
-            return posts;
+            return new ForumItem(type, id, link, updated);
         }
 
-        private async Task SendEmail(ForumPostItem post)
+        private async Task SetItemUpdated(ForumItem item)
         {
-            Console.WriteLine($"  Sending {post.Type} {post.Id} (#{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName})...");
-            // Console.WriteLine(GetEmailBody(post));
-
-            await Storage.ExecuteNonQueryAsync("INSERT INTO Posts (PostId) VALUES (@Param0)", post.Id);
+            await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
         }
 
         private static string GetEmailBody(ForumPostItem post)
@@ -275,72 +252,63 @@ namespace ForumScanner
             {
                 switch (type.Key)
                 {
-                    case "InnerText":
-                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value)?.InnerText ?? $"<default:{configuration.Path}>"), " ").Trim();
-                    case "InnerHtml":
-                        return node.SelectSingleNode(type.Value).InnerHtml;
+                    case "Constant":
+                        return type.Value;
                     case "Attribute":
                         foreach (var attribute in type.GetChildren())
                         {
                             return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value)?.Attributes?[attribute.Key]?.Value ?? $"<default:{configuration.Path}>");
                         }
                         goto default;
+                    case "InnerHtml":
+                        return node.SelectSingleNode(type.Value).InnerHtml;
+                    case "InnerText":
+                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value)?.InnerText ?? $"<default:{configuration.Path}>"), " ").Trim();
                     default:
                         throw new InvalidDataException($"Invalid value type for GetHtmlValue: {type.Path}");
                 }
             }
+
             throw new InvalidDataException($"Missing value type for GetHtmlValue: {configuration.Path}");
-        }
-    }
-
-    class ForumItems
-    {
-        public List<ForumItem> Forums { get; }
-        public List<ForumItem> Topics { get; }
-
-        public ForumItems()
-        {
-            Forums = new List<ForumItem>();
-            Topics = new List<ForumItem>();
         }
     }
 
     class ForumItem
     {
         public ForumItemType Type { get; }
+        public int Id { get; }
         public string Link { get; }
         public string Updated { get; }
 
-        public ForumItem(ForumItemType type, string link, string updated)
+        public ForumItem(ForumItemType type, int id, string link, string updated)
         {
             Type = type;
+            Id = id;
             Link = link;
             Updated = updated;
         }
 
         override public string ToString()
         {
-            return $"{Type} {Link}";
+            return $"{Type} {Id} {Link}";
         }
     }
 
     class ForumPostItem : ForumItem
     {
         public string ForumName { get; }
-        public int Id { get; }
-        public int Index { get; }
         public string ReplyLink { get; }
+        public int Index { get; }
         public DateTimeOffset Date { get; }
         public string Author { get; }
         public HtmlNode Body { get; }
 
-        public ForumPostItem(string forumName, int id, int index, string link, string replyLink, DateTimeOffset date, string author, HtmlNode body)
-            : base(ForumItemType.Post, link, null)
+        public ForumPostItem(string forumName, int id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
+            : base(ForumItemType.Post, id, link, "")
         {
             ForumName = forumName;
-            Id = id;
-            Index = index;
             ReplyLink = replyLink;
+            Index = index;
             Date = date;
             Author = author;
             Body = body;
