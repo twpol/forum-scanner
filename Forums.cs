@@ -29,6 +29,7 @@ namespace ForumScanner
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
                 { ForumItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
                 { ForumItemType.Topic, new Regex(Configuration["Topics:IdUrlPattern"]) },
+                { ForumItemType.Post, new Regex(Configuration["Posts:IdIdPattern"]) },
             };
         }
 
@@ -73,10 +74,15 @@ namespace ForumScanner
                 }
             }
 
+            var posts = new List<ForumPostItem>();
             foreach (var topic in topicSet)
             {
-                var posts = await GetNewPosts(topic);
-                break;
+                posts.AddRange(await GetNewPosts(topic));
+            }
+
+            foreach (var post in posts)
+            {
+                await SendEmail(post);
             }
         }
 
@@ -140,25 +146,52 @@ namespace ForumScanner
 
             var forumName = GetHtmlValue(document.DocumentNode, Configuration.GetSection("Posts:ForumName"));
 
+            var posts = new List<ForumPostItem>();
             var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
             foreach (var postItem in postItems)
             {
-                var post = new ForumPostItem(
+                var idString = IdUrlPattern[ForumItemType.Post].Match(postItem.Attributes["id"].Value)?.Groups?[1]?.Value;
+                if (idString == null)
+                {
+                    continue;
+                }
+
+                int id;
+                if (!int.TryParse(idString, out id))
+                {
+                    continue;
+                }
+
+                var lastPostId = await Storage.ExecuteScalarAsync("SELECT PostId FROM Posts WHERE PostId = @Param0", id);
+                if (lastPostId != null)
+                {
+                    continue;
+                }
+
+                posts.Add(new ForumPostItem(
+                    forumName,
+                    id,
                     GetHtmlValue<int>(postItem, Configuration.GetSection("Posts:Index")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:Link")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:ReplyLink")),
                     GetHtmlValue<DateTimeOffset>(postItem, Configuration.GetSection("Posts:Date")),
                     GetHtmlValue(postItem, Configuration.GetSection("Posts:Author")),
                     GetHtmlValue<HtmlNode>(postItem, Configuration.GetSection("Posts:Body"))
-                );
-                Console.WriteLine($"    Message #{post.Index} {post.Date} {post.Author} {post.Link} {post.Body.InnerHtml.Length}");
-                Console.WriteLine(GetEmailBody(forumName, post));
+                ));
             }
 
-            return new List<ForumPostItem>();
+            return posts;
         }
 
-        private static string GetEmailBody(string forumName, ForumPostItem post)
+        private async Task SendEmail(ForumPostItem post)
+        {
+            Console.WriteLine($"  Sending {post.Type} {post.Id} (#{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName})...");
+            // Console.WriteLine(GetEmailBody(post));
+
+            await Storage.ExecuteNonQueryAsync("INSERT INTO Posts (PostId) VALUES (@Param0)", post.Id);
+        }
+
+        private static string GetEmailBody(ForumPostItem post)
         {
             return "<!DOCTYPE html>" +
                 "<html>" +
@@ -175,7 +208,7 @@ namespace ForumScanner
                         $"{FormatBodyForEmail(post.Body)}" +
                         "<div class='email-notifications-footer'>" +
                             "<hr>" +
-                            $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {forumName} (<a href='{post.ReplyLink}'>reply</a>, <a href='{post.Link}'>view in forum</a>)" +
+                            $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName} (<a href='{post.ReplyLink}'>reply</a>, <a href='{post.Link}'>view in forum</a>)" +
                         "</div>" +
                     "</body>" +
                 "</html>";
@@ -243,13 +276,13 @@ namespace ForumScanner
                 switch (type.Key)
                 {
                     case "InnerText":
-                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value).InnerText), " ").Trim();
+                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value)?.InnerText ?? $"<default:{configuration.Path}>"), " ").Trim();
                     case "InnerHtml":
                         return node.SelectSingleNode(type.Value).InnerHtml;
                     case "Attribute":
                         foreach (var attribute in type.GetChildren())
                         {
-                            return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value).Attributes[attribute.Key]?.Value ?? $"<default:{attribute.Path}>");
+                            return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value)?.Attributes?[attribute.Key]?.Value ?? $"<default:{configuration.Path}>");
                         }
                         goto default;
                     default:
@@ -293,15 +326,19 @@ namespace ForumScanner
 
     class ForumPostItem : ForumItem
     {
+        public string ForumName { get; }
+        public int Id { get; }
         public int Index { get; }
         public string ReplyLink { get; }
         public DateTimeOffset Date { get; }
         public string Author { get; }
         public HtmlNode Body { get; }
 
-        public ForumPostItem(int index, string link, string replyLink, DateTimeOffset date, string author, HtmlNode body)
+        public ForumPostItem(string forumName, int id, int index, string link, string replyLink, DateTimeOffset date, string author, HtmlNode body)
             : base(ForumItemType.Post, link, null)
         {
+            ForumName = forumName;
+            Id = id;
             Index = index;
             ReplyLink = replyLink;
             Date = date;

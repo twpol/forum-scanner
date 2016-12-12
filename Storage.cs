@@ -24,17 +24,22 @@ namespace ForumScanner
             Connection.Close();
         }
 
-        public async Task ExecuteNonQueryAsync(string commandText)
+        public async Task ExecuteNonQueryAsync(string commandText, params object[] parameters)
         {
-            var command = Connection.CreateCommand();
-            command.CommandText = commandText;
-            await command.ExecuteNonQueryAsync();
+            await CreateCommand(commandText, parameters).ExecuteNonQueryAsync();
         }
 
         public async Task<object> ExecuteScalarAsync(string commandText, params object[] parameters)
         {
+            return await CreateCommand(commandText, parameters).ExecuteScalarAsync();
+        }
+
+        private DbCommand CreateCommand(string commandText, object[] parameters)
+        {
             var command = Connection.CreateCommand();
+
             command.CommandText = commandText;
+
             for (var i = 0; i < parameters.Length; i++)
             {
                 var param = command.CreateParameter();
@@ -42,7 +47,8 @@ namespace ForumScanner
                 param.Value = parameters[i];
                 command.Parameters.Add(param);
             }
-            return await command.ExecuteScalarAsync();
+
+            return command;
         }
     }
 }
