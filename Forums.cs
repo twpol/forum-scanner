@@ -6,7 +6,9 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
+using MailKit.Net.Smtp;
 using Microsoft.Extensions.Configuration;
+using MimeKit;
 
 namespace ForumScanner
 {
@@ -121,7 +123,26 @@ namespace ForumScanner
 
             Console.WriteLine($"      Processing {post}...");
 
-            // Console.WriteLine(GetEmailBody(post));
+            if (Configuration["Email:To:Email"] != null)
+            {
+                var message = new MimeMessage();
+                message.Date = post.Date;
+                message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
+                message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
+                message.Subject = post.Index == 1 ? post.TopicName : $"RE: {post.TopicName}";
+                message.Body = new TextPart("html")
+                {
+                    Text = GetEmailBody(post)
+                };
+
+                using (var smtp = new SmtpClient())
+                {
+                    await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
+                    await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
+                    await smtp.SendAsync(message);
+                    await smtp.DisconnectAsync(true);
+                }
+            }
 
             await SetItemUpdated(post);
         }
@@ -162,6 +183,7 @@ namespace ForumScanner
             {
                 return new ForumPostItem(
                     GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
+                    GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
                     id,
                     GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
                     GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
@@ -177,6 +199,11 @@ namespace ForumScanner
         private async Task SetItemUpdated(ForumItem item)
         {
             await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
+        }
+
+        private static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
+        {
+            return new MailboxAddress(name ?? configuration["Name"], configuration["Email"]);
         }
 
         private static string GetEmailBody(ForumPostItem post)
@@ -308,16 +335,18 @@ namespace ForumScanner
     class ForumPostItem : ForumItem
     {
         public string ForumName { get; }
+        public string TopicName { get; }
         public string ReplyLink { get; }
         public int Index { get; }
         public DateTimeOffset Date { get; }
         public string Author { get; }
         public HtmlNode Body { get; }
 
-        public ForumPostItem(string forumName, int id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
+        public ForumPostItem(string forumName, string topicName, int id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
             : base(ForumItemType.Post, id, link, "")
         {
             ForumName = forumName;
+            TopicName = topicName;
             ReplyLink = replyLink;
             Index = index;
             Date = date;
