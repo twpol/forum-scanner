@@ -86,16 +86,26 @@ namespace ForumScanner
                 return;
             }
 
-            Console.WriteLine($"    Processing {topic}...");
-            var document = await LoadItem(topic);
-
-            var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
-            if (postItems != null)
+            while (true)
             {
-                foreach (var postItem in postItems)
+                Console.WriteLine($"    Processing {topic}...");
+                var document = await LoadItem(topic);
+
+                var postItems = document.DocumentNode.SelectNodes(Configuration["Posts:Item"]);
+                if (postItems != null)
                 {
-                    await ProcessPost(await CheckItemIsUpdated(ForumItemType.Post, postItem));
+                    foreach (var postItem in postItems)
+                    {
+                        await ProcessPost(await CheckItemIsUpdated(ForumItemType.Post, postItem));
+                    }
                 }
+
+                var nextLink = GetHtmlValue(document.DocumentNode, Configuration.GetSection("Topics:Next"));
+                if (nextLink.StartsWith("<default:"))
+                {
+                    break;
+                }
+                topic = new ForumItem(topic.Type, topic.Id, nextLink, topic.Updated);
             }
 
             await SetItemUpdated(topic);
@@ -258,13 +268,13 @@ namespace ForumScanner
                     case "Attribute":
                         foreach (var attribute in type.GetChildren())
                         {
-                            return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value)?.Attributes?[attribute.Key]?.Value ?? $"<default:{configuration.Path}>");
+                            return WebUtility.HtmlDecode(node.SelectSingleNode(attribute.Value)?.Attributes?[attribute.Key]?.Value ?? $"<default:{attribute.Path}>");
                         }
                         goto default;
                     case "InnerHtml":
                         return node.SelectSingleNode(type.Value).InnerHtml;
                     case "InnerText":
-                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value)?.InnerText ?? $"<default:{configuration.Path}>"), " ").Trim();
+                        return WhitespacePattern.Replace(WebUtility.HtmlDecode(node.SelectSingleNode(type.Value)?.InnerText ?? $"<default:{type.Path}>"), " ").Trim();
                     default:
                         throw new InvalidDataException($"Invalid value type for GetHtmlValue: {type.Path}");
                 }
