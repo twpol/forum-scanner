@@ -126,6 +126,9 @@ namespace ForumScanner
             if (Configuration["Email:To:Email"] != null)
             {
                 var message = new MimeMessage();
+                message.Headers["X-ForumScanner-Forum"] = post.ForumName;
+                message.Headers["X-ForumScanner-Topic"] = post.TopicName;
+                message.Headers["X-ForumScanner-Post"] = $"{post.Id}";
                 message.Date = post.Date;
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
@@ -149,8 +152,8 @@ namespace ForumScanner
 
         private async Task<HtmlDocument> LoadItem(ForumItem item)
         {
-            // Responses are expected to be around 100 KB, so a 16s delay means about a 50 Kbps.
-            await Task.Delay(16000);
+            // Responses are expected to be around 100 KB, so a 8s delay means about a maximum throughput of 100 Kbps.
+            await Task.Delay(8000);
             var response = await Client.GetAsync(item.Link);
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
