@@ -1,4 +1,6 @@
-﻿using System.Net;
+﻿using System;
+using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
@@ -6,38 +8,66 @@ using Microsoft.Extensions.Configuration;
 
 namespace ForumScanner
 {
-    public class Program
+    class Program
     {
-        public static void Main(string[] args)
+        static void Main(string[] args)
         {
             MainAsync(args).Wait();
         }
 
-        private static async Task MainAsync(string[] args)
+        static async Task MainAsync(string[] args)
         {
-            var configuration = LoadConfiguration();
-            var storage = await LoadStorage(configuration);
-            var client = CreateHttpClient();
-
-            foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
+            try
             {
-                var forums = new Forums(configurationForum, storage, client);
-                await forums.Process();
-            }
+                ParseCommandLine(args, out var config, out var debug);
+                var configuration = LoadConfiguration(config);
+                var storage = await LoadStorage(configuration, debug.Value);
+                var client = CreateHttpClient();
 
-            storage.Close();
+                foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
+                {
+                    var forums = new Forums(configurationForum, storage, client);
+                    await forums.Process();
+                }
+
+                storage.Close();
+            }
+            catch (CommandLineParser.Exceptions.CommandLineException e)
+            {
+                Console.WriteLine(e.Message);
+            }
         }
 
-        private static IConfigurationRoot LoadConfiguration()
+        static void ParseCommandLine(string[] args, out CommandLineParser.Arguments.FileArgument config, out CommandLineParser.Arguments.SwitchArgument debug)
+        {
+            config = new CommandLineParser.Arguments.FileArgument('c', "config")
+            {
+                DefaultValue = new FileInfo("config.json")
+            };
+
+            debug = new CommandLineParser.Arguments.SwitchArgument('d', "debug", false);
+
+            var commandLineParser = new CommandLineParser.CommandLineParser()
+            {
+                Arguments = {
+                    config,
+                    debug,
+                }
+            };
+
+            commandLineParser.ParseCommandLine(args);
+        }
+
+        static IConfigurationRoot LoadConfiguration(CommandLineParser.Arguments.FileArgument config)
         {
             return new ConfigurationBuilder()
-                .AddJsonFile("appsettings.json", true)
+                .AddJsonFile(config.Value.FullName, true)
                 .Build();
         }
 
-        private static async Task<Storage> LoadStorage(IConfigurationRoot configuration)
+        static async Task<Storage> LoadStorage(IConfigurationRoot configuration, bool debug)
         {
-            var storage = new Storage(configuration.GetConnectionString("Storage"));
+            var storage = new Storage(configuration.GetConnectionString("Storage"), debug);
             await storage.Open();
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId integer NOT NULL UNIQUE, Updated text)");
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId integer NOT NULL UNIQUE, Updated text)");
@@ -45,7 +75,7 @@ namespace ForumScanner
             return storage;
         }
 
-        private static HttpClient CreateHttpClient()
+        static HttpClient CreateHttpClient()
         {
             var clientHandler = new HttpClientHandler()
             {

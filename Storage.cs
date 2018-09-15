@@ -1,3 +1,4 @@
+using System;
 using System.Data.Common;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
@@ -6,12 +7,17 @@ namespace ForumScanner
 {
     public class Storage
     {
-        DbConnection Connection;
+        readonly DbConnection Connection;
+        readonly bool Debug;
 
-        public Storage(string connectionString)
+        public Storage(string connectionString, bool debug)
         {
             Connection = new SqliteConnection();
             Connection.ConnectionString = connectionString;
+            Debug = debug;
+            if (Debug) {
+                Console.WriteLine("Running in debug mode; not data changes will be persisted.");
+            }
         }
 
         public async Task Open()
@@ -26,7 +32,18 @@ namespace ForumScanner
 
         public async Task ExecuteNonQueryAsync(string commandText, params object[] parameters)
         {
-            await CreateCommand(commandText, parameters).ExecuteNonQueryAsync();
+            if (Debug)
+            {
+                Console.WriteLine(commandText);
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    Console.WriteLine("    {0,2}  {1}", i, parameters[i]);
+                }
+            }
+            else
+            {
+                await CreateCommand(commandText, parameters).ExecuteNonQueryAsync();
+            }
         }
 
         public async Task<object> ExecuteScalarAsync(string commandText, params object[] parameters)
