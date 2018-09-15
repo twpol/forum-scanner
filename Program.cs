@@ -23,8 +23,6 @@ namespace ForumScanner
             {
                 var forums = new Forums(configurationForum, storage, client);
                 await forums.Process();
-                // TODO: Send emails
-                // TODO: Save results
             }
 
             storage.Close();

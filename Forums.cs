@@ -57,25 +57,35 @@ namespace ForumScanner
                 return;
             }
 
-            Console.WriteLine($"  Processing {forum}...");
-            var document = await LoadItem(forum);
-
-            var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"]);
-            if (forumItems != null)
+            while (true)
             {
-                foreach (var forumItem in forumItems)
-                {
-                    await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
-                }
-            }
+                Console.WriteLine($"  Processing {forum}...");
+                var document = await LoadItem(forum);
 
-            var topicItems = document.DocumentNode.SelectNodes(Configuration["Topics:Item"]);
-            if (topicItems != null)
-            {
-                foreach (var topicItem in topicItems)
+                var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"]);
+                if (forumItems != null)
                 {
-                    await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
+                    foreach (var forumItem in forumItems)
+                    {
+                        await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
+                    }
                 }
+
+                var topicItems = document.DocumentNode.SelectNodes(Configuration["Topics:Item"]);
+                if (topicItems != null)
+                {
+                    foreach (var topicItem in topicItems)
+                    {
+                        await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
+                    }
+                }
+
+                var nextLink = GetHtmlValue(document.DocumentNode, Configuration.GetSection("Forums:Next"));
+                if (nextLink.StartsWith("<default:"))
+                {
+                    break;
+                }
+                forum = new ForumItem(forum.Type, forum.Id, nextLink, forum.Updated);
             }
 
             await SetItemUpdated(forum);
