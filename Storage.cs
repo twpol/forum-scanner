@@ -51,7 +51,7 @@ namespace ForumScanner
             return await CreateCommand(commandText, parameters).ExecuteScalarAsync();
         }
 
-        private DbCommand CreateCommand(string commandText, object[] parameters)
+        DbCommand CreateCommand(string commandText, object[] parameters)
         {
             var command = Connection.CreateCommand();
 

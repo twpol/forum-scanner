@@ -50,7 +50,7 @@ namespace ForumScanner
             await ProcessForum(new ForumItem(ForumItemType.Forum, 0, Configuration["RootUrl"], ""));
         }
 
-        private async Task ProcessForum(ForumItem forum)
+        async Task ProcessForum(ForumItem forum)
         {
             if (forum == null)
             {
@@ -91,7 +91,7 @@ namespace ForumScanner
             await SetItemUpdated(forum);
         }
 
-        private async Task ProcessTopic(ForumItem topic)
+        async Task ProcessTopic(ForumItem topic)
         {
             if (topic == null)
             {
@@ -123,7 +123,7 @@ namespace ForumScanner
             await SetItemUpdated(topic);
         }
 
-        private async Task ProcessPost(ForumItem item)
+        async Task ProcessPost(ForumItem item)
         {
             if (item == null || !(item is ForumPostItem))
             {
@@ -160,7 +160,7 @@ namespace ForumScanner
             await SetItemUpdated(post);
         }
 
-        private async Task<HtmlDocument> LoadItem(ForumItem item)
+        async Task<HtmlDocument> LoadItem(ForumItem item)
         {
             // Responses are expected to be around 100 KB, so a 8s delay means about a maximum throughput of 100 Kbps.
             await Task.Delay(8000);
@@ -170,7 +170,7 @@ namespace ForumScanner
             return document;
         }
 
-        private async Task<ForumItem> CheckItemIsUpdated(ForumItemType type, HtmlNode htmlItem)
+        async Task<ForumItem> CheckItemIsUpdated(ForumItemType type, HtmlNode htmlItem)
         {
             var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
@@ -209,17 +209,17 @@ namespace ForumScanner
             return new ForumItem(type, id, link, updated);
         }
 
-        private async Task SetItemUpdated(ForumItem item)
+        async Task SetItemUpdated(ForumItem item)
         {
             await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
         }
 
-        private static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
+        static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
         {
             return new MailboxAddress(name ?? configuration["Name"], configuration["Email"]);
         }
 
-        private static string GetEmailBody(ForumPostItem post)
+        static string GetEmailBody(ForumPostItem post)
         {
             return "<!DOCTYPE html>" +
                 "<html>" +
@@ -242,7 +242,7 @@ namespace ForumScanner
                 "</html>";
         }
 
-        private static string FormatBodyForEmail(HtmlNode body)
+        static string FormatBodyForEmail(HtmlNode body)
         {
             // <p class='citation'>
             //   <a class='snapback' rel='citation' href='...'>
@@ -277,7 +277,7 @@ namespace ForumScanner
             return body.OuterHtml;
         }
 
-        private static T GetHtmlValue<T>(HtmlNode node, IConfigurationSection configuration)
+        static T GetHtmlValue<T>(HtmlNode node, IConfigurationSection configuration)
         {
             var value = GetHtmlValue(node, configuration);
             switch (typeof(T).FullName)
@@ -297,7 +297,7 @@ namespace ForumScanner
             }
         }
 
-        private static string GetHtmlValue(HtmlNode node, IConfigurationSection configuration)
+        static string GetHtmlValue(HtmlNode node, IConfigurationSection configuration)
         {
             foreach (var type in configuration.GetChildren())
             {

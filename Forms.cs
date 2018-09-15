@@ -48,7 +48,7 @@ namespace ForumScanner
             }
         }
 
-        private static Dictionary<string, string> GetFormData(IConfigurationSection configuration, HtmlNode form)
+        static Dictionary<string, string> GetFormData(IConfigurationSection configuration, HtmlNode form)
         {
             var configurationInput = configuration.GetSection("Input");
             var formData = new Dictionary<string, string>();
@@ -74,7 +74,7 @@ namespace ForumScanner
             return formData;
         }
 
-        private static string EncodeFormData(string formMethod, string formEncType, Dictionary<string, string> formData)
+        static string EncodeFormData(string formMethod, string formEncType, Dictionary<string, string> formData)
         {
             var formBody = new StringBuilder();
 
