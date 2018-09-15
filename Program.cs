@@ -26,7 +26,7 @@ namespace ForumScanner
 
                 foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
                 {
-                    var forums = new Forums(configurationForum, storage, client);
+                    var forums = new Forums(configurationForum, storage, client, debug.Value);
                     await forums.Process();
                 }
 

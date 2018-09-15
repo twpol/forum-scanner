@@ -17,16 +17,18 @@ namespace ForumScanner
         IConfigurationSection Configuration { get; }
         Storage Storage { get; }
         HttpClient Client { get; }
+        bool Debug { get; }
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
 
         static readonly Regex WhitespacePattern = new Regex(@"\s+");
 
-        public Forums(IConfigurationSection configuration, Storage storage, HttpClient client)
+        public Forums(IConfigurationSection configuration, Storage storage, HttpClient client, bool debug)
         {
             Configuration = configuration;
             Storage = storage;
             Client = client;
+            Debug = debug;
 
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
                 { ForumItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
@@ -148,23 +150,33 @@ namespace ForumScanner
                     Text = GetEmailBody(post)
                 };
 
-                using (var smtp = new SmtpClient())
+                Console.WriteLine($"      Email: Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName}");
+                if (!Debug)
                 {
-                    await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
-                    await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
-                    await smtp.SendAsync(message);
-                    await smtp.DisconnectAsync(true);
+                    using (var smtp = new SmtpClient())
+                    {
+                        await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
+                        await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
+                        await smtp.SendAsync(message);
+                        await smtp.DisconnectAsync(true);
+                    }
                 }
             }
 
             await SetItemUpdated(post);
         }
 
+        const float SecondsToMilliseconds = 1000;
+        const float MaxBandwidthBytesPerSec = 100000 / 8;
+
         async Task<HtmlDocument> LoadItem(ForumItem item)
         {
-            // Responses are expected to be around 100 KB, so a 8s delay means about a maximum throughput of 100 Kbps.
-            await Task.Delay(8000);
             var response = await Client.GetAsync(item.Link);
+
+            // Limit maximum throughput to 100 Kbps by delaying based on content length.
+            var wait = (int)(SecondsToMilliseconds * response.Content.Headers.ContentLength.Value / MaxBandwidthBytesPerSec);
+            await Task.Delay(wait);
+
             var document = new HtmlDocument();
             document.Load(await response.Content.ReadAsStreamAsync());
             return document;
@@ -175,38 +187,32 @@ namespace ForumScanner
             var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
             var idString = IdUrlPattern[type].Match(type == ForumItemType.Post ? htmlItem.Attributes["id"].Value : link)?.Groups?[1]?.Value;
-            if (idString == null)
-            {
-                return null;
-            }
+            if (idString == null) throw new InvalidDataException($"Cannot find ID for {type}");
+            if (!int.TryParse(idString, out var id)) throw new InvalidDataException($"Cannot parse ID for {type}");
 
-            int id;
-            if (!int.TryParse(idString, out id))
-            {
-                return null;
-            }
+            var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", id) as string;
+            if (updated == lastUpdated) return null;
 
-            var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", id);
-            if (updated == lastUpdated as string)
+            switch (type)
             {
-                return null;
+                case ForumItemType.Forum:
+                case ForumItemType.Topic:
+                    return new ForumItem(type, id, link, updated);
+                case ForumItemType.Post:
+                    return new ForumPostItem(
+                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
+                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
+                        id,
+                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
+                        GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
+                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
+                        GetHtmlValue<DateTimeOffset>(htmlItem, Configuration.GetSection("Posts:Date")),
+                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Author")),
+                        GetHtmlValue<HtmlNode>(htmlItem, Configuration.GetSection("Posts:Body"))
+                    );
+                default:
+                    throw new InvalidDataException($"Unknown type {type} in CheckItemIsUpdated");
             }
-
-            if (type == ForumItemType.Post)
-            {
-                return new ForumPostItem(
-                    GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
-                    GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
-                    id,
-                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
-                    GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
-                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
-                    GetHtmlValue<DateTimeOffset>(htmlItem, Configuration.GetSection("Posts:Date")),
-                    GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Author")),
-                    GetHtmlValue<HtmlNode>(htmlItem, Configuration.GetSection("Posts:Body"))
-                );
-            }
-            return new ForumItem(type, id, link, updated);
         }
 
         async Task SetItemUpdated(ForumItem item)
