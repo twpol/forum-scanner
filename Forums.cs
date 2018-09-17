@@ -21,6 +21,8 @@ namespace ForumScanner
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
 
+        int EmailsSent = 0;
+
         static readonly Regex WhitespacePattern = new Regex(@"\s+");
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client, bool debug)
@@ -137,6 +139,11 @@ namespace ForumScanner
 
             if (Configuration["Email:To:Email"] != null)
             {
+                if (int.TryParse(Configuration["Email:MaxPerRun"], out var maxPerRun) && EmailsSent >= maxPerRun)
+                {
+                    throw new InvalidOperationException("Maximum number of emails to send reached");
+                }
+
                 var message = new MimeMessage();
                 message.Headers["X-ForumScanner-Forum"] = post.ForumName;
                 message.Headers["X-ForumScanner-Topic"] = post.TopicName;
@@ -153,17 +160,23 @@ namespace ForumScanner
                 Console.WriteLine($"      Email: Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName}");
                 if (!Debug)
                 {
-                    using (var smtp = new SmtpClient())
-                    {
-                        await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
-                        await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
-                        await smtp.SendAsync(message);
-                        await smtp.DisconnectAsync(true);
-                    }
+                    await SendEmail(message);
                 }
+                EmailsSent++;
             }
 
             await SetItemUpdated(post);
+        }
+
+        async Task SendEmail(MimeMessage message)
+        {
+            using (var smtp = new SmtpClient())
+            {
+                await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
+                await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
+                await smtp.SendAsync(message);
+                await smtp.DisconnectAsync(true);
+            }
         }
 
         const float SecondsToMilliseconds = 1000;
