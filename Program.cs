@@ -72,6 +72,7 @@ namespace ForumScanner
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId integer NOT NULL UNIQUE, Updated text)");
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId integer NOT NULL UNIQUE, Updated text)");
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId integer NOT NULL UNIQUE, Updated text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Errors (Source text, Date datetime, Error text)");
             return storage;
         }
 

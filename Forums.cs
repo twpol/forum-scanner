@@ -18,6 +18,7 @@ namespace ForumScanner
         Storage Storage { get; }
         HttpClient Client { get; }
         bool Debug { get; }
+        int MaxEmailErrors = int.MaxValue;
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
 
@@ -31,6 +32,7 @@ namespace ForumScanner
             Storage = storage;
             Client = client;
             Debug = debug;
+            int.TryParse(Configuration["Email:MaxErrors"], out MaxEmailErrors);
 
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
                 { ForumItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
@@ -157,12 +159,23 @@ namespace ForumScanner
                     Text = GetEmailBody(post)
                 };
 
-                Console.WriteLine($"      Email: Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName}");
-                if (!Debug)
+                var source = $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName}";
+                Console.WriteLine($"      Email: {source}");
+
+                var errors = await Storage.ExecuteScalarAsync("SELECT COUNT(*) FROM Errors WHERE Source = @Param0", source) as long?;
+                if (errors.Value >= MaxEmailErrors) return;
+
+                try
                 {
+                    EmailsSent++;
                     await SendEmail(message);
                 }
-                EmailsSent++;
+                catch (Exception error)
+                {
+                    await Storage.ExecuteNonQueryAsync("INSERT INTO Errors (Source, Date, Error) VALUES (@Param0, @Param1, @Param2)", source, DateTimeOffset.Now, error.ToString());
+                    // Do not set the item as updated if we've had an error!
+                    return;
+                }
             }
 
             await SetItemUpdated(post);
@@ -170,6 +183,8 @@ namespace ForumScanner
 
         async Task SendEmail(MimeMessage message)
         {
+            if (Debug) return;
+
             using (var smtp = new SmtpClient())
             {
                 await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
