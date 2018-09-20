@@ -159,7 +159,7 @@ namespace ForumScanner
                     Text = GetEmailBody(post)
                 };
 
-                var source = $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName}";
+                var source = $"{post.ForumName} > {post.TopicName} > #{post.Index} ({post.Id}) at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author}";
                 Console.WriteLine($"      Email: {source}");
 
                 var errors = await Storage.ExecuteScalarAsync("SELECT COUNT(*) FROM Errors WHERE Source = @Param0", source) as long?;
