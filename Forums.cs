@@ -25,6 +25,8 @@ namespace ForumScanner
         int EmailsSent = 0;
 
         static readonly Regex WhitespacePattern = new Regex(@"\s+");
+        static readonly Regex GetUrlDomainName = new Regex(@"^\w+://([^/]+)/.*");
+        static readonly Regex UnsafeCharacters = new Regex("[^a-z0-9]+");
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client, bool debug)
         {
@@ -146,14 +148,21 @@ namespace ForumScanner
                     throw new InvalidOperationException("Maximum number of emails to send reached");
                 }
 
+                var safeTopicName = UnsafeCharacters.Replace(post.TopicName, "-");
+                var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
+
                 var message = new MimeMessage();
+                message.MessageId = $"{safeTopicName}/{post.Index}@{rootDomainName}";
+                if (post.Index >= 2) {
+                    message.InReplyTo = $"{safeTopicName}/{post.Index - 1}@{rootDomainName}";
+                }
                 message.Headers["X-ForumScanner-Forum"] = post.ForumName;
                 message.Headers["X-ForumScanner-Topic"] = post.TopicName;
                 message.Headers["X-ForumScanner-Post"] = $"{post.Id}";
                 message.Date = post.Date;
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
-                message.Subject = post.Index == 1 ? post.TopicName : $"RE: {post.TopicName}";
+                message.Subject = post.Index == 1 ? post.TopicName : $"Re: {post.TopicName}";
                 message.Body = new TextPart("html")
                 {
                     Text = GetEmailBody(post)
