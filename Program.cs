@@ -42,7 +42,7 @@ namespace ForumScanner
         {
             config = new CommandLineParser.Arguments.FileArgument('c', "config")
             {
-                DefaultValue = new FileInfo("config.json")
+                ForcedDefaultValue = new FileInfo("config.json")
             };
 
             debug = new CommandLineParser.Arguments.SwitchArgument('d', "debug", false);
