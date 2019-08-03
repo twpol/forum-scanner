@@ -148,7 +148,7 @@ namespace ForumScanner
                     throw new InvalidOperationException("Maximum number of emails to send reached");
                 }
 
-                var safeTopicName = UnsafeCharacters.Replace(post.TopicName, "-");
+                var safeTopicName = UnsafeCharacters.Replace(post.TopicName.ToLowerInvariant(), "-");
                 var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
 
                 var message = new MimeMessage();
