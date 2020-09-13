@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
+using MailKit;
 using MailKit.Net.Smtp;
 using Microsoft.Extensions.Configuration;
 using MimeKit;
@@ -56,6 +57,31 @@ namespace ForumScanner
             }
 
             await ProcessForum(new ForumItem(ForumItemType.Forum, 0, Configuration["RootUrl"], ""));
+
+            if (Debug)
+            {
+                Console.WriteLine($"Sending debug email...");
+
+                var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
+
+                var message = new MimeMessage();
+                message.MessageId = $"test/{DateTimeOffset.Now.ToString("yyyy-MM-dd/HH-mm-ss")}@{rootDomainName}";
+                message.Date = DateTimeOffset.Now;
+                message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), "debug-from"));
+                message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
+                message.Subject = "Forum Scanner Debug Subject";
+                message.Body = new TextPart("html")
+                {
+                    Text = "<!DOCTYPE html>" +
+                    "<html>" +
+                        "<body>" +
+                            "<h1>Forum Scanner Debug Body" +
+                        "</body>" +
+                    "</html>",
+                };
+
+                await SendEmail(message);
+            }
         }
 
         async Task ProcessForum(ForumItem forum)
@@ -153,7 +179,8 @@ namespace ForumScanner
 
                 var message = new MimeMessage();
                 message.MessageId = $"{safeTopicName}/{post.Index}@{rootDomainName}";
-                if (post.Index >= 2) {
+                if (post.Index >= 2)
+                {
                     message.InReplyTo = $"{safeTopicName}/{post.Index - 1}@{rootDomainName}";
                 }
                 message.Headers["X-ForumScanner-Forum"] = post.ForumName;
@@ -177,7 +204,7 @@ namespace ForumScanner
                 try
                 {
                     EmailsSent++;
-                    await SendEmail(message);
+                    if (!Debug) await SendEmail(message);
                 }
                 catch (Exception error)
                 {
@@ -190,14 +217,16 @@ namespace ForumScanner
             await SetItemUpdated(post);
         }
 
-        async Task SendEmail(MimeMessage message)
+        public async Task SendEmail(MimeMessage message)
         {
-            if (Debug) return;
-
-            using (var smtp = new SmtpClient())
+            var logger = Debug ? new ProtocolLogger(Console.OpenStandardOutput()) : (IProtocolLogger)new NullProtocolLogger();
+            using (var smtp = new SmtpClient(logger))
             {
-                await smtp.ConnectAsync(Configuration["Email:SmtpServer"]);
-                await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
+                await smtp.ConnectAsync(Configuration["Email:SmtpServer"], int.Parse(Configuration["Email:SmtpPort"] ?? "587"));
+                if (Configuration["Email:SmtpUsername"] != null)
+                {
+                    await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
+                }
                 await smtp.SendAsync(message);
                 await smtp.DisconnectAsync(true);
             }
@@ -259,7 +288,7 @@ namespace ForumScanner
 
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
         {
-            return new MailboxAddress(name ?? configuration["Name"], configuration["Email"]);
+            return new MailboxAddress(configuration["Name"].Replace("$name$", name ?? ""), configuration["Email"]);
         }
 
         static string GetEmailBody(ForumPostItem post)
