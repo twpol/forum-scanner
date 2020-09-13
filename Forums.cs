@@ -129,6 +129,11 @@ namespace ForumScanner
             }
 
             await SetItemUpdated(topic);
+
+            if (int.TryParse(Configuration["Email:MaxPerRun"], out var maxPerRun) && EmailsSent >= maxPerRun)
+            {
+                throw new InvalidOperationException("Maximum number of emails to send reached");
+            }
         }
 
         async Task ProcessPost(ForumItem item)
@@ -143,11 +148,6 @@ namespace ForumScanner
 
             if (Configuration["Email:To:Email"] != null)
             {
-                if (int.TryParse(Configuration["Email:MaxPerRun"], out var maxPerRun) && EmailsSent >= maxPerRun)
-                {
-                    throw new InvalidOperationException("Maximum number of emails to send reached");
-                }
-
                 var safeTopicName = UnsafeCharacters.Replace(post.TopicName.ToLowerInvariant(), "-");
                 var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
 
