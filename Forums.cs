@@ -22,6 +22,7 @@ namespace ForumScanner
         int MaxEmailErrors = int.MaxValue;
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
+        Dictionary<ForumItemType, Regex> IdIdPattern { get; }
 
         int EmailsSent = 0;
 
@@ -38,9 +39,14 @@ namespace ForumScanner
             int.TryParse(Configuration["Email:MaxErrors"], out MaxEmailErrors);
 
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
-                { ForumItemType.Forum, new Regex(Configuration["Forums:IdUrlPattern"]) },
-                { ForumItemType.Topic, new Regex(Configuration["Topics:IdUrlPattern"]) },
-                { ForumItemType.Post, new Regex(Configuration["Posts:IdIdPattern"]) },
+                { ForumItemType.Forum, Configuration["Forums:IdUrlPattern"] != null ? new Regex(Configuration["Forums:IdUrlPattern"]) : null },
+                { ForumItemType.Topic, Configuration["Topics:IdUrlPattern"] != null ? new Regex(Configuration["Topics:IdUrlPattern"]) : null },
+                { ForumItemType.Post, Configuration["Posts:IdUrlPattern"] != null ? new Regex(Configuration["Posts:IdUrlPattern"]) : null },
+            };
+            IdIdPattern = new Dictionary<ForumItemType, Regex>() {
+                { ForumItemType.Forum, Configuration["Forums:IdIdPattern"] != null ? new Regex(Configuration["Forums:IdIdPattern"]) : null },
+                { ForumItemType.Topic, Configuration["Topics:IdIdPattern"] != null ? new Regex(Configuration["Topics:IdIdPattern"]) : null },
+                { ForumItemType.Post, Configuration["Posts:IdIdPattern"] != null ? new Regex(Configuration["Posts:IdIdPattern"]) : null },
             };
         }
 
@@ -56,7 +62,7 @@ namespace ForumScanner
                 await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
-            await ProcessForum(new ForumItem(ForumItemType.Forum, 0, Configuration["RootUrl"], ""));
+            await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl"], ""));
 
             if (Debug)
             {
@@ -91,16 +97,20 @@ namespace ForumScanner
                 return;
             }
 
+            var forumIndex = 0;
+            var topicIndex = 0;
             while (true)
             {
                 Console.WriteLine($"  Processing {forum}...");
                 var document = await LoadItem(forum);
 
-                var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"]);
+                var forumItems = document.DocumentNode.SelectNodes(Configuration["Forums:Item"] ?? ".//fake_no_match");
                 if (forumItems != null)
                 {
                     foreach (var forumItem in forumItems)
                     {
+                        forumIndex++;
+                        forumItem.SetAttributeValue("__forum_scanner_forum_index__", forumIndex.ToString());
                         await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
                     }
                 }
@@ -110,6 +120,8 @@ namespace ForumScanner
                 {
                     foreach (var topicItem in topicItems)
                     {
+                        topicIndex++;
+                        topicItem.SetAttributeValue("__forum_scanner_topic_index__", topicIndex.ToString());
                         await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
                     }
                 }
@@ -132,6 +144,7 @@ namespace ForumScanner
                 return;
             }
 
+            var postIndex = 0;
             while (true)
             {
                 Console.WriteLine($"    Processing {topic}...");
@@ -142,6 +155,8 @@ namespace ForumScanner
                 {
                     foreach (var postItem in postItems)
                     {
+                        postIndex++;
+                        postItem.SetAttributeValue("__forum_scanner_post_index__", postIndex.ToString());
                         await ProcessPost(await CheckItemIsUpdated(ForumItemType.Post, postItem));
                     }
                 }
@@ -158,7 +173,7 @@ namespace ForumScanner
 
             if (int.TryParse(Configuration["Email:MaxPerRun"], out var maxPerRun) && EmailsSent >= maxPerRun)
             {
-                throw new InvalidOperationException("Maximum number of emails to send reached");
+                throw new MaximumEmailLimitException();
             }
         }
 
@@ -252,23 +267,26 @@ namespace ForumScanner
         {
             var link = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Link"));
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
-            var idString = IdUrlPattern[type].Match(type == ForumItemType.Post ? htmlItem.Attributes["id"].Value : link)?.Groups?[1]?.Value;
+            var idUrlPattern = IdUrlPattern[type];
+            var idIdPattern = IdIdPattern[type];
+            var idString = (idUrlPattern != null ? idUrlPattern.Match(link) : idIdPattern.Match(htmlItem.Attributes["id"].Value))?.Groups?[1]?.Value;
             if (idString == null) throw new InvalidDataException($"Cannot find ID for {type}");
             if (!int.TryParse(idString, out var id)) throw new InvalidDataException($"Cannot parse ID for {type}");
+            var uniqueId = $"{Configuration.Key}/{id}";
 
-            var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", id) as string;
+            var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", uniqueId) as string;
             if (updated == lastUpdated) return null;
 
             switch (type)
             {
                 case ForumItemType.Forum:
                 case ForumItemType.Topic:
-                    return new ForumItem(type, id, link, updated);
+                    return new ForumItem(type, uniqueId, link, updated);
                 case ForumItemType.Post:
                     return new ForumPostItem(
                         GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
                         GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
-                        id,
+                        uniqueId,
                         GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
                         GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
                         GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
@@ -352,6 +370,7 @@ namespace ForumScanner
         static T GetHtmlValue<T>(HtmlNode node, IConfigurationSection configuration)
         {
             var value = GetHtmlValue(node, configuration);
+            var format = configuration["Format"];
             switch (typeof(T).FullName)
             {
                 case "HtmlAgilityPack.HtmlNode":
@@ -359,6 +378,7 @@ namespace ForumScanner
                     document.LoadHtml(value);
                     return (T)(object)document.DocumentNode;
                 case "System.DateTimeOffset":
+                    if (format != null) return (T)(object)DateTimeOffset.ParseExact(value, format, null);
                     return (T)(object)DateTimeOffset.Parse(value);
                 case "System.Int32":
                     return (T)(object)int.Parse(value.Replace("#", ""));
@@ -375,6 +395,9 @@ namespace ForumScanner
             {
                 switch (type.Key)
                 {
+                    case "Format":
+                        // Ignored - see GetHtmlValue<T>
+                        break;
                     case "Constant":
                         return type.Value;
                     case "Attribute":
@@ -396,14 +419,22 @@ namespace ForumScanner
         }
     }
 
+    public class MaximumEmailLimitException : Exception
+    {
+        public MaximumEmailLimitException()
+            : base("Maximum number of emails to send reached")
+        {
+        }
+    }
+
     class ForumItem
     {
         public ForumItemType Type { get; }
-        public int Id { get; }
+        public string Id { get; }
         public string Link { get; }
         public string Updated { get; }
 
-        public ForumItem(ForumItemType type, int id, string link, string updated)
+        public ForumItem(ForumItemType type, string id, string link, string updated)
         {
             Type = type;
             Id = id;
@@ -427,7 +458,7 @@ namespace ForumScanner
         public string Author { get; }
         public HtmlNode Body { get; }
 
-        public ForumPostItem(string forumName, string topicName, int id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
+        public ForumPostItem(string forumName, string topicName, string id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
             : base(ForumItemType.Post, id, link, "")
         {
             ForumName = forumName;
