@@ -122,7 +122,7 @@ namespace ForumScanner
                     {
                         topicIndex++;
                         topicItem.SetAttributeValue("__forum_scanner_topic_index__", topicIndex.ToString());
-                        await ProcessTopic(await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
+                        await ProcessTopic(forum, await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
                     }
                 }
 
@@ -137,7 +137,7 @@ namespace ForumScanner
             await SetItemUpdated(forum);
         }
 
-        async Task ProcessTopic(ForumItem topic)
+        async Task ProcessTopic(ForumItem forum, ForumItem topic)
         {
             if (topic == null)
             {
@@ -157,7 +157,7 @@ namespace ForumScanner
                     {
                         postIndex++;
                         postItem.SetAttributeValue("__forum_scanner_post_index__", postIndex.ToString());
-                        await ProcessPost(await CheckItemIsUpdated(ForumItemType.Post, postItem));
+                        await ProcessPost(forum, topic, await CheckItemIsUpdated(ForumItemType.Post, postItem));
                     }
                 }
 
@@ -177,7 +177,7 @@ namespace ForumScanner
             }
         }
 
-        async Task ProcessPost(ForumItem item)
+        async Task ProcessPost(ForumItem forum, ForumItem topic, ForumItem item)
         {
             if (item == null || !(item is ForumPostItem))
             {
@@ -189,18 +189,20 @@ namespace ForumScanner
 
             if (Configuration["Email:To:Email"] != null)
             {
-                var safeTopicName = UnsafeCharacters.Replace(post.TopicName.ToLowerInvariant(), "-");
                 var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
 
                 var message = new MimeMessage();
-                message.MessageId = $"{safeTopicName}/{post.Index}@{rootDomainName}";
+                message.MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}";
                 if (post.Index >= 2)
                 {
-                    message.InReplyTo = $"{safeTopicName}/{post.Index - 1}@{rootDomainName}";
+                    message.InReplyTo = $"{topic.Id}/{post.Index - 1}@{rootDomainName}";
                 }
-                message.Headers["X-ForumScanner-Forum"] = post.ForumName;
-                message.Headers["X-ForumScanner-Topic"] = post.TopicName;
-                message.Headers["X-ForumScanner-Post"] = $"{post.Id}";
+                message.Headers["X-ForumScanner-ForumId"] = forum.Id;
+                message.Headers["X-ForumScanner-ForumName"] = post.ForumName;
+                message.Headers["X-ForumScanner-TopicId"] = topic.Id;
+                message.Headers["X-ForumScanner-TopicName"] = post.TopicName;
+                message.Headers["X-ForumScanner-PostId"] = post.Id;
+                message.Headers["X-ForumScanner-PostIndex"] = post.Index.ToString();
                 message.Date = post.Date;
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
