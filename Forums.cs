@@ -206,7 +206,7 @@ namespace ForumScanner
                 message.Date = post.Date;
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
-                message.Subject = post.Index == 1 ? post.TopicName : $"Re: {post.TopicName}";
+                message.Subject = GetSubject(Configuration.GetSection("Email"), forum, topic, post);
                 message.Body = new TextPart("html")
                 {
                     Text = GetEmailBody(post)
@@ -309,6 +309,16 @@ namespace ForumScanner
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
         {
             return new MailboxAddress(configuration["Name"].Replace("$name$", name ?? ""), configuration["Email"]);
+        }
+
+        static string GetSubject(IConfigurationSection config, ForumItem forum, ForumItem topic, ForumPostItem post)
+        {
+            var template = post.Index == 1 ? config["SubjectOP"] : config["SubjectRE"];
+            return template.Replace("$forum-id$", forum.Id)
+                           .Replace("$topic-id$", topic.Id)
+                           .Replace("$post-id$", post.Id)
+                           .Replace("$forum$", post.ForumName)
+                           .Replace("$topic$", post.TopicName);
         }
 
         static string GetEmailBody(ForumPostItem post)
