@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
@@ -185,6 +186,8 @@ namespace ForumScanner
             }
             var post = item as ForumPostItem;
 
+            post.ApplyTemplate(template => GetTemplateResult(template, forum, topic, post));
+
             Console.WriteLine($"      Processing {post}...");
 
             if (Configuration["Email:To:Email"] != null)
@@ -313,12 +316,25 @@ namespace ForumScanner
 
         static string GetSubject(IConfigurationSection config, ForumItem forum, ForumItem topic, ForumPostItem post)
         {
-            var template = post.Index == 1 ? config["SubjectOP"] : config["SubjectRE"];
-            return template.Replace("$forum-id$", forum.Id)
-                           .Replace("$topic-id$", topic.Id)
-                           .Replace("$post-id$", post.Id)
-                           .Replace("$forum$", post.ForumName)
-                           .Replace("$topic$", post.TopicName);
+            return GetTemplateResult(post.Index == 1 ? config["SubjectOP"] : config["SubjectRE"], forum, topic, post);
+        }
+
+        static string GetTemplateResult(string template, ForumItem forum, ForumItem topic, ForumPostItem post)
+        {
+            return GetTemplateResult(template, forum.Id, topic.Id, post.Id, post.ForumName, post.TopicName, post.Index.ToString());
+        }
+
+        static string GetTemplateResult(string template, string forumId, string topicId, string postId, string forumName, string topicName, string postIndex)
+        {
+            return template.Replace("$forum-key$", forumId)
+                           .Replace("$forum-id$", forumId.Split("/").Last())
+                           .Replace("$forum$", forumName)
+                           .Replace("$topic-key$", topicId)
+                           .Replace("$topic-id$", topicId.Split("/").Last())
+                           .Replace("$topic$", topicName)
+                           .Replace("$post-key$", postId)
+                           .Replace("$post-id$", postId.Split("/").Last())
+                           .Replace("$post-index$", postIndex);
         }
 
         static string GetEmailBody(ForumPostItem post)
@@ -443,7 +459,7 @@ namespace ForumScanner
     {
         public ForumItemType Type { get; }
         public string Id { get; }
-        public string Link { get; }
+        public string Link { get; protected set; }
         public string Updated { get; }
 
         public ForumItem(ForumItemType type, string id, string link, string updated)
@@ -464,7 +480,7 @@ namespace ForumScanner
     {
         public string ForumName { get; }
         public string TopicName { get; }
-        public string ReplyLink { get; }
+        public string ReplyLink { get; protected set; }
         public int Index { get; }
         public DateTimeOffset Date { get; }
         public string Author { get; }
@@ -480,6 +496,12 @@ namespace ForumScanner
             Date = date;
             Author = author;
             Body = body;
+        }
+
+        public void ApplyTemplate(Func<string, string> templater)
+        {
+            Link = templater(Link);
+            ReplyLink = templater(ReplyLink);
         }
     }
 
