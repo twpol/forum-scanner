@@ -29,7 +29,7 @@ namespace ForumScanner
 
         static readonly Regex WhitespacePattern = new Regex(@"\s+");
         static readonly Regex GetUrlDomainName = new Regex(@"^\w+://([^/]+)/.*");
-        static readonly Regex UnsafeCharacters = new Regex("[^a-z0-9]+");
+        static readonly Regex UnsafeCharacters = new Regex("[^a-zA-Z0-9]+");
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client, bool debug)
         {
@@ -206,6 +206,8 @@ namespace ForumScanner
                 message.Headers["X-ForumScanner-TopicName"] = post.TopicName;
                 message.Headers["X-ForumScanner-PostId"] = post.Id;
                 message.Headers["X-ForumScanner-PostIndex"] = post.Index.ToString();
+                message.Headers["Auto-Submitted"] = "auto-generated";
+                message.Headers["Precedence"] = "bulk";
                 message.Date = post.Date;
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
@@ -311,7 +313,7 @@ namespace ForumScanner
 
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
         {
-            return new MailboxAddress(configuration["Name"].Replace("$name$", name ?? ""), configuration["Email"]);
+            return new MailboxAddress(configuration["Name"].Replace("$name$", name ?? ""), configuration["Email"].Replace("$name$", UnsafeCharacters.Replace(name ?? "", "").ToLowerInvariant()));
         }
 
         static string GetSubject(IConfigurationSection config, ForumItem forum, ForumItem topic, ForumPostItem post)
