@@ -20,7 +20,10 @@ namespace ForumScanner
         Storage Storage { get; }
         HttpClient Client { get; }
         bool Debug { get; }
+        int MaxEmailMinutes = int.MaxValue;
+        int MaxEmailCount = int.MaxValue;
         int MaxEmailErrors = int.MaxValue;
+        DateTimeOffset StartTime;
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
         Dictionary<ForumItemType, Regex> IdIdPattern { get; }
@@ -37,6 +40,8 @@ namespace ForumScanner
             Storage = storage;
             Client = client;
             Debug = debug;
+            int.TryParse(Configuration["Email:MaxMinutes"], out MaxEmailMinutes);
+            int.TryParse(Configuration["Email:MaxPerRun"], out MaxEmailCount);
             int.TryParse(Configuration["Email:MaxErrors"], out MaxEmailErrors);
 
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
@@ -53,6 +58,7 @@ namespace ForumScanner
 
         public async Task Process()
         {
+            StartTime = DateTimeOffset.Now;
             Console.WriteLine($"Processing {Configuration.Key}...");
 
             // For some reason the HtmlAgilityPack default is CanOverlap | Empty which means <form> elements never contain anything!
@@ -171,11 +177,6 @@ namespace ForumScanner
             }
 
             await SetItemUpdated(topic);
-
-            if (int.TryParse(Configuration["Email:MaxPerRun"], out var maxPerRun) && EmailsSent >= maxPerRun)
-            {
-                throw new MaximumEmailLimitException();
-            }
         }
 
         async Task ProcessPost(ForumItem forum, ForumItem topic, ForumItem item)
@@ -309,6 +310,11 @@ namespace ForumScanner
         async Task SetItemUpdated(ForumItem item)
         {
             await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
+
+            if ((DateTimeOffset.Now - StartTime).TotalMinutes >= MaxEmailMinutes || EmailsSent >= MaxEmailCount)
+            {
+                throw new MaximumLimitException();
+            }
         }
 
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
@@ -449,10 +455,10 @@ namespace ForumScanner
         }
     }
 
-    public class MaximumEmailLimitException : Exception
+    public class MaximumLimitException : Exception
     {
-        public MaximumEmailLimitException()
-            : base("Maximum number of emails to send reached")
+        public MaximumLimitException()
+            : base("Maximum time or number of emails to send reached")
         {
         }
     }

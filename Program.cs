@@ -32,7 +32,7 @@ namespace ForumScanner
                     {
                         await forums.Process();
                     }
-                    catch (MaximumEmailLimitException)
+                    catch (MaximumLimitException)
                     {
                         // Ignore; we'll send more emails next time
                     }
