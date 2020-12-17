@@ -69,7 +69,14 @@ namespace ForumScanner
                 await Forms.LoadAndSubmit(Configuration.GetSection("LoginForm"), Client);
             }
 
-            await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl"], ""));
+            try
+            {
+                await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl"], ""));
+            }
+            catch (MaximumLimitException error)
+            {
+                Console.WriteLine($"  {error.Message}");
+            }
 
             if (Debug)
             {
@@ -311,10 +318,8 @@ namespace ForumScanner
         {
             await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
 
-            if ((DateTimeOffset.Now - StartTime).TotalMinutes >= MaxEmailMinutes || EmailsSent >= MaxEmailCount)
-            {
-                throw new MaximumLimitException();
-            }
+            if ((DateTimeOffset.Now - StartTime).TotalMinutes >= MaxEmailMinutes) throw new MaximumTimeLimitException();
+            if (EmailsSent >= MaxEmailCount) throw new MaximumEmailLimitException();
         }
 
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
@@ -457,8 +462,24 @@ namespace ForumScanner
 
     public class MaximumLimitException : Exception
     {
-        public MaximumLimitException()
-            : base("Maximum time or number of emails to send reached")
+        public MaximumLimitException(string message)
+            : base(message)
+        {
+        }
+    }
+
+    public class MaximumTimeLimitException : MaximumLimitException
+    {
+        public MaximumTimeLimitException()
+            : base("Maximum time limit reached")
+        {
+        }
+    }
+
+    public class MaximumEmailLimitException : MaximumLimitException
+    {
+        public MaximumEmailLimitException()
+            : base("Maximum number of emails to send reached")
         {
         }
     }

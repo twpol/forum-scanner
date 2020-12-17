@@ -28,14 +28,7 @@ namespace ForumScanner
                 foreach (var configurationForum in configuration.GetSection("Forums").GetChildren())
                 {
                     var forums = new Forums(configurationForum, storage, client, debug.Value);
-                    try
-                    {
-                        await forums.Process();
-                    }
-                    catch (MaximumLimitException)
-                    {
-                        // Ignore; we'll send more emails next time
-                    }
+                    await forums.Process();
                 }
 
                 storage.Close();
