@@ -9,7 +9,7 @@
 			"type": "coreclr",
 			"request": "launch",
 			"preLaunchTask": "build",
-			"program": "${workspaceFolder}/bin/Debug/netcoreapp2.0/forum-scanner.dll",
+			"program": "${workspaceFolder}/bin/Debug/netcoreapp3.1/forum-scanner.dll",
 			"args": [
 				"--debug"
 			],

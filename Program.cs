@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -69,11 +70,26 @@ namespace ForumScanner
         {
             var storage = new Storage(configuration.GetConnectionString("Storage"), debug);
             await storage.Open();
-            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId integer NOT NULL UNIQUE, Updated text)");
-            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId integer NOT NULL UNIQUE, Updated text)");
-            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId integer NOT NULL UNIQUE, Updated text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Forums (ForumId text NOT NULL UNIQUE, Updated text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Topics (TopicId text NOT NULL UNIQUE, Updated text)");
+            await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Posts (PostId text NOT NULL UNIQUE, Updated text)");
             await storage.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS Errors (Source text, Date datetime, Error text)");
+            await ApplyMigrationToTextIDs(configuration, storage);
             return storage;
+        }
+
+        static async Task ApplyMigrationToTextIDs(IConfigurationRoot configuration, Storage storage)
+        {
+            // Schema migration: convert IDs from integer to text, in the format $"{ForumName}/{OriginalValue}"
+            var forumNames = configuration.GetSection("Forums").GetChildren().ToArray();
+            Func<Task> forumNamePreCheck = () =>
+            {
+                if (forumNames.Length > 1) throw new InvalidOperationException("Unable to do schema migration from `integer` to `text` IDs because multiple forum configurations exist");
+                return Task.CompletedTask;
+            };
+            await storage.AlterTableAlterColumnType("Forums", "ForumId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Forums SET ForumId = @Param0 || '/' || ForumId", forumNames[0].Key));
+            await storage.AlterTableAlterColumnType("Topics", "TopicId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Topics SET TopicId = @Param0 || '/' || TopicId", forumNames[0].Key));
+            await storage.AlterTableAlterColumnType("Posts", "PostId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Posts SET PostId = @Param0 || '/' || PostId", forumNames[0].Key));
         }
 
         static HttpClient CreateHttpClient()
