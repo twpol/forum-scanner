@@ -104,13 +104,11 @@ namespace ForumScanner
             }
         }
 
-        async Task ProcessForum(ForumItem forum)
+        async Task<bool> ProcessForum(ForumItem forum)
         {
-            if (forum == null)
-            {
-                return;
-            }
+            if (forum == null) return true;
 
+            var updated = true;
             var forumIndex = 0;
             var topicIndex = 0;
             while (true)
@@ -125,7 +123,7 @@ namespace ForumScanner
                     {
                         forumIndex++;
                         forumItem.SetAttributeValue("__forum_scanner_forum_index__", forumIndex.ToString());
-                        await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
+                        updated &= await ProcessForum(await CheckItemIsUpdated(ForumItemType.Forum, forumItem));
                     }
                 }
 
@@ -136,7 +134,7 @@ namespace ForumScanner
                     {
                         topicIndex++;
                         topicItem.SetAttributeValue("__forum_scanner_topic_index__", topicIndex.ToString());
-                        await ProcessTopic(forum, await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
+                        updated &= await ProcessTopic(forum, await CheckItemIsUpdated(ForumItemType.Topic, topicItem));
                     }
                 }
 
@@ -148,16 +146,14 @@ namespace ForumScanner
                 forum = new ForumItem(forum.Type, forum.Id, nextLink, forum.Updated);
             }
 
-            await SetItemUpdated(forum);
+            return await SetItemUpdated(forum, updated);
         }
 
-        async Task ProcessTopic(ForumItem forum, ForumItem topic)
+        async Task<bool> ProcessTopic(ForumItem forum, ForumItem topic)
         {
-            if (topic == null)
-            {
-                return;
-            }
+            if (topic == null) return true;
 
+            var updated = true;
             var postIndex = 0;
             while (true)
             {
@@ -171,7 +167,7 @@ namespace ForumScanner
                     {
                         postIndex++;
                         postItem.SetAttributeValue("__forum_scanner_post_index__", postIndex.ToString());
-                        await ProcessPost(forum, topic, await CheckItemIsUpdated(ForumItemType.Post, postItem));
+                        updated &= await ProcessPost(forum, topic, await CheckItemIsUpdated(ForumItemType.Post, postItem));
                     }
                 }
 
@@ -183,68 +179,62 @@ namespace ForumScanner
                 topic = new ForumItem(topic.Type, topic.Id, nextLink, topic.Updated);
             }
 
-            await SetItemUpdated(topic);
+            return await SetItemUpdated(topic, updated);
         }
 
-        async Task ProcessPost(ForumItem forum, ForumItem topic, ForumItem item)
+        async Task<bool> ProcessPost(ForumItem forum, ForumItem topic, ForumItem item)
         {
-            if (item == null || !(item is ForumPostItem))
-            {
-                return;
-            }
-            var post = item as ForumPostItem;
+            if (item == null || !(item is ForumPostItem)) return true;
 
+            var updated = false;
+            var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
+            var post = item as ForumPostItem;
             post.ApplyTemplate(template => GetTemplateResult(template, forum, topic, post));
 
             Console.WriteLine($"      Processing {post}...");
 
-            if (Configuration["Email:To:Email"] != null)
+            var message = new MimeMessage();
+            message.MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}";
+            if (post.Index >= 2)
             {
-                var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
+                message.InReplyTo = $"{topic.Id}/{post.Index - 1}@{rootDomainName}";
+            }
+            message.Headers["X-ForumScanner-ForumId"] = forum.Id;
+            message.Headers["X-ForumScanner-ForumName"] = post.ForumName;
+            message.Headers["X-ForumScanner-TopicId"] = topic.Id;
+            message.Headers["X-ForumScanner-TopicName"] = post.TopicName;
+            message.Headers["X-ForumScanner-PostId"] = post.Id;
+            message.Headers["X-ForumScanner-PostIndex"] = post.Index.ToString();
+            message.Headers["Auto-Submitted"] = "auto-generated";
+            message.Headers["Precedence"] = "bulk";
+            message.Date = post.Date;
+            message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
+            message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
+            message.Subject = GetSubject(Configuration.GetSection("Email"), forum, topic, post);
+            message.Body = new TextPart("html")
+            {
+                Text = GetEmailBody(post)
+            };
 
-                var message = new MimeMessage();
-                message.MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}";
-                if (post.Index >= 2)
-                {
-                    message.InReplyTo = $"{topic.Id}/{post.Index - 1}@{rootDomainName}";
-                }
-                message.Headers["X-ForumScanner-ForumId"] = forum.Id;
-                message.Headers["X-ForumScanner-ForumName"] = post.ForumName;
-                message.Headers["X-ForumScanner-TopicId"] = topic.Id;
-                message.Headers["X-ForumScanner-TopicName"] = post.TopicName;
-                message.Headers["X-ForumScanner-PostId"] = post.Id;
-                message.Headers["X-ForumScanner-PostIndex"] = post.Index.ToString();
-                message.Headers["Auto-Submitted"] = "auto-generated";
-                message.Headers["Precedence"] = "bulk";
-                message.Date = post.Date;
-                message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), post.Author));
-                message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
-                message.Subject = GetSubject(Configuration.GetSection("Email"), forum, topic, post);
-                message.Body = new TextPart("html")
-                {
-                    Text = GetEmailBody(post)
-                };
-
-                var source = $"{post.ForumName} > {post.TopicName} > #{post.Index} ({post.Id}) at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author}";
-                Console.WriteLine($"      Email: {source}");
-
-                var errors = await Storage.ExecuteScalarAsync("SELECT COUNT(*) FROM Errors WHERE Source = @Param0", source) as long?;
-                if (errors.Value >= MaxEmailErrors) return;
-
+            var source = $"{post.ForumName} > {post.TopicName} > #{post.Index} ({post.Id}) at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author}";
+            var errors = await Storage.ExecuteScalarAsync("SELECT COUNT(*) FROM Errors WHERE Source = @Param0", source) as long?;
+            if (errors.Value < MaxEmailErrors)
+            {
                 try
                 {
+                    Console.WriteLine($"        Email: {source}");
                     EmailsSent++;
                     if (!Debug) await SendEmail(message);
+                    updated = true;
                 }
                 catch (Exception error)
                 {
+                    Console.WriteLine($"        {error.ToString().Split("\n")[0].Replace("\r", "")}");
                     await Storage.ExecuteNonQueryAsync("INSERT INTO Errors (Source, Date, Error) VALUES (@Param0, @Param1, @Param2)", source, DateTimeOffset.Now, error.ToString());
-                    // Do not set the item as updated if we've had an error!
-                    return;
                 }
             }
 
-            await SetItemUpdated(post);
+            return await SetItemUpdated(post, updated);
         }
 
         public async Task SendEmail(MimeMessage message)
@@ -314,12 +304,17 @@ namespace ForumScanner
             }
         }
 
-        async Task SetItemUpdated(ForumItem item)
+        async Task<bool> SetItemUpdated(ForumItem item, bool updated)
         {
-            await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
+            if (updated)
+            {
+                await Storage.ExecuteNonQueryAsync($"INSERT OR REPLACE INTO {item.Type}s ({item.Type}Id, Updated) VALUES (@Param0, @Param1)", item.Id, item.Updated);
 
-            if ((DateTimeOffset.Now - StartTime).TotalMinutes >= MaxEmailMinutes) throw new MaximumTimeLimitException();
-            if (EmailsSent >= MaxEmailCount) throw new MaximumEmailLimitException();
+                if ((DateTimeOffset.Now - StartTime).TotalMinutes >= MaxEmailMinutes) throw new MaximumTimeLimitException();
+                if (EmailsSent >= MaxEmailCount) throw new MaximumEmailLimitException();
+            }
+
+            return updated;
         }
 
         static MailboxAddress GetMailboxAddress(IConfigurationSection configuration, string name = null)
