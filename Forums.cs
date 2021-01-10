@@ -41,7 +41,7 @@ namespace ForumScanner
             Client = client;
             Debug = debug;
             int.TryParse(Configuration["Email:MaxMinutes"], out MaxEmailMinutes);
-            int.TryParse(Configuration["Email:MaxPerRun"], out MaxEmailCount);
+            int.TryParse(Configuration["Email:MaxEmails"], out MaxEmailCount);
             int.TryParse(Configuration["Email:MaxErrors"], out MaxEmailErrors);
 
             IdUrlPattern = new Dictionary<ForumItemType, Regex>() {
@@ -197,7 +197,7 @@ namespace ForumScanner
             message.MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}";
             if (post.Index >= 2)
             {
-                message.InReplyTo = $"{topic.Id}/{post.Index - 1}@{rootDomainName}";
+                message.InReplyTo = $"{topic.Id}/1@{rootDomainName}";
             }
             message.Headers["X-ForumScanner-ForumId"] = forum.Id;
             message.Headers["X-ForumScanner-ForumName"] = post.ForumName;
