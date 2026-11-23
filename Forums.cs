@@ -253,13 +253,13 @@ namespace ForumScanner
         }
 
         const float SecondsToMilliseconds = 1000;
-        const float MaxBandwidthBytesPerSec = 100000 / 8;
+        const float MaxBandwidthBytesPerSec = 256000 / 8;
 
         async Task<HtmlDocument> LoadItem(ForumItem item)
         {
             var response = await Client.GetAsync(item.Link);
 
-            // Limit maximum throughput to 100 Kbps by delaying based on content length.
+            // Limit maximum throughput to 256 Kbps by delaying based on content length.
             var wait = (int)(SecondsToMilliseconds * response.Content.Headers.ContentLength.Value / MaxBandwidthBytesPerSec);
             await Task.Delay(wait);
 
