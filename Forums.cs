@@ -235,6 +235,11 @@ namespace ForumScanner
                     await Storage.ExecuteNonQueryAsync("INSERT INTO Errors (Source, Date, Error) VALUES (@Param0, @Param1, @Param2)", source, DateTimeOffset.Now, error.ToString());
                 }
             }
+            else
+            {
+                // This is to avoid indefinitely trying to process this post, which can never succeed as we've already reached the retry limit
+                updated = true;
+            }
 
             return await SetItemUpdated(post, updated);
         }
