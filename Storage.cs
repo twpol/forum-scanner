@@ -6,15 +6,17 @@ using Microsoft.Data.Sqlite;
 
 namespace ForumScanner
 {
-    public class Storage
+    public partial class Storage
     {
         readonly DbConnection Connection;
         readonly bool Debug;
 
         public Storage(string connectionString, bool debug)
         {
-            Connection = new SqliteConnection();
-            Connection.ConnectionString = connectionString;
+            Connection = new SqliteConnection
+            {
+                ConnectionString = connectionString
+            };
             Debug = debug;
             if (Debug)
             {
@@ -60,7 +62,7 @@ namespace ForumScanner
 
         public async Task<bool> AlterTableAlterColumnType(string table, string column, string type, Func<Task> preCheck = null, Func<Task> postUpdate = null)
         {
-            var patternColumnsInSchema = new Regex("^CREATE TABLE \"?\\w+\"? \\((.*)\\)$");
+            var patternColumnsInSchema = MyRegex();
             var patternColumnType = new Regex($@"(?<={column} +)\w+(?= |,)");
 
             var schema = (string)await ExecuteScalarAsync($"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = @Param0", table);
@@ -126,5 +128,8 @@ namespace ForumScanner
 
             return command;
         }
+
+        [GeneratedRegex("^CREATE TABLE \"?\\w+\"? \\((.*)\\)$")]
+        private static partial Regex MyRegex();
     }
 }

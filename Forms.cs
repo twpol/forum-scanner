@@ -35,7 +35,7 @@ namespace ForumScanner
             switch (formMethod)
             {
                 case "GET":
-                    formAction += (formAction.Contains("?") ? "&" : "?") + formBody;
+                    formAction += (formAction.Contains('?') ? "&" : "?") + formBody;
                     await client.GetAsync(formAction);
                     break;
                 case "POST":
@@ -85,10 +85,10 @@ namespace ForumScanner
                     {
                         if (formBody.Length > 0)
                         {
-                            formBody.Append("&");
+                            formBody.Append('&');
                         }
                         formBody.Append(WebUtility.UrlEncode(kvp.Key));
-                        formBody.Append("=");
+                        formBody.Append('=');
                         formBody.Append(WebUtility.UrlEncode(kvp.Value));
                     }
                     break;

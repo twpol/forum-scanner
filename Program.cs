@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -82,11 +82,11 @@ namespace ForumScanner
         {
             // Schema migration: convert IDs from integer to text, in the format $"{ForumName}/{OriginalValue}"
             var forumNames = configuration.GetSection("Forums").GetChildren().ToArray();
-            Func<Task> forumNamePreCheck = () =>
+            Task forumNamePreCheck()
             {
                 if (forumNames.Length > 1) throw new InvalidOperationException("Unable to do schema migration from `integer` to `text` IDs because multiple forum configurations exist");
                 return Task.CompletedTask;
-            };
+            }
             await storage.AlterTableAlterColumnType("Forums", "ForumId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Forums SET ForumId = @Param0 || '/' || ForumId", forumNames[0].Key));
             await storage.AlterTableAlterColumnType("Topics", "TopicId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Topics SET TopicId = @Param0 || '/' || TopicId", forumNames[0].Key));
             await storage.AlterTableAlterColumnType("Posts", "PostId", "text", forumNamePreCheck, async () => await storage.ExecuteNonQueryAsync($"UPDATE Posts SET PostId = @Param0 || '/' || PostId", forumNames[0].Key));
