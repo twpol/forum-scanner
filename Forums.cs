@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -407,6 +408,8 @@ namespace ForumScanner
         {
             var value = GetHtmlValue(node, configuration);
             var format = configuration["Format"];
+            var formatYesterday = configuration["Format:Yesterday"];
+            var formatToday = configuration["Format:Today"];
             switch (typeof(T).FullName)
             {
                 case "HtmlAgilityPack.HtmlNode":
@@ -414,7 +417,9 @@ namespace ForumScanner
                     document.LoadHtml(value);
                     return (T)(object)document.DocumentNode;
                 case "System.DateTimeOffset":
-                    if (format != null) return (T)(object)DateTimeOffset.ParseExact(value, format, null);
+                    if (formatToday != null && DateTimeOffset.TryParseExact(value, formatToday, null, DateTimeStyles.None, out var f1)) return (T)(object)f1;
+                    if (formatYesterday != null && DateTimeOffset.TryParseExact(value, formatYesterday, null, DateTimeStyles.None, out var f2)) return (T)(object)f2.AddDays(-1);
+                    if (format != null && DateTimeOffset.TryParseExact(value, format, null, DateTimeStyles.None, out var f3)) return (T)(object)f3;
                     return (T)(object)DateTimeOffset.Parse(value);
                 case "System.Int32":
                     return (T)(object)int.Parse(value.Replace("#", ""));
