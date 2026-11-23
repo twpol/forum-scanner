@@ -73,6 +73,7 @@ namespace ForumScanner
             try
             {
                 await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl"], ""));
+                if (Configuration["RootUrl2"] != null) await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl2"], ""));
             }
             catch (MaximumLimitException error)
             {
