@@ -15,15 +15,15 @@ using MimeKit;
 
 namespace ForumScanner
 {
-    public class Forums
+    public partial class Forums
     {
         IConfigurationSection Configuration { get; }
         Storage Storage { get; }
         HttpClient Client { get; }
         bool Debug { get; }
-        int MaxEmailMinutes = int.MaxValue;
-        int MaxEmailCount = int.MaxValue;
-        int MaxEmailErrors = int.MaxValue;
+        readonly int MaxEmailMinutes = int.MaxValue;
+        readonly int MaxEmailCount = int.MaxValue;
+        readonly int MaxEmailErrors = int.MaxValue;
         DateTimeOffset StartTime;
 
         Dictionary<ForumItemType, Regex> IdUrlPattern { get; }
@@ -31,9 +31,9 @@ namespace ForumScanner
 
         int EmailsSent = 0;
 
-        static readonly Regex WhitespacePattern = new Regex(@"\s+");
-        static readonly Regex GetUrlDomainName = new Regex(@"^\w+://([^/]+)/.*");
-        static readonly Regex UnsafeCharacters = new Regex("[^a-zA-Z0-9]+");
+        static readonly Regex WhitespacePattern = MyRegex();
+        static readonly Regex GetUrlDomainName = new(@"^\w+://([^/]+)/.*");
+        static readonly Regex UnsafeCharacters = new("[^a-zA-Z0-9]+");
 
         public Forums(IConfigurationSection configuration, Storage storage, HttpClient client, bool debug)
         {
@@ -86,9 +86,11 @@ namespace ForumScanner
 
                 var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
 
-                var message = new MimeMessage();
-                message.MessageId = $"test/{DateTimeOffset.Now.ToString("yyyy-MM-dd/HH-mm-ss")}@{rootDomainName}";
-                message.Date = DateTimeOffset.Now;
+                var message = new MimeMessage
+                {
+                    MessageId = $"test/{DateTimeOffset.Now:yyyy-MM-dd/HH-mm-ss}@{rootDomainName}",
+                    Date = DateTimeOffset.Now
+                };
                 message.From.Add(GetMailboxAddress(Configuration.GetSection("Email:From"), "debug-from"));
                 message.To.Add(GetMailboxAddress(Configuration.GetSection("Email:To")));
                 message.Subject = "Forum Scanner Debug Subject";
@@ -186,7 +188,7 @@ namespace ForumScanner
 
         async Task<bool> ProcessPost(ForumItem forum, ForumItem topic, ForumItem item)
         {
-            if (item == null || !(item is ForumPostItem)) return true;
+            if (item == null || item is not ForumPostItem) return true;
 
             var updated = false;
             var rootDomainName = GetUrlDomainName.Replace(Configuration["RootUrl"], "$1");
@@ -195,8 +197,10 @@ namespace ForumScanner
 
             Console.WriteLine($"      Processing {post}...");
 
-            var message = new MimeMessage();
-            message.MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}";
+            var message = new MimeMessage
+            {
+                MessageId = $"{topic.Id}/{post.Index}@{rootDomainName}"
+            };
             if (post.Index >= 2)
             {
                 message.InReplyTo = $"{topic.Id}/1@{rootDomainName}";
@@ -218,7 +222,7 @@ namespace ForumScanner
                 Text = GetEmailBody(post)
             };
 
-            var source = $"{post.ForumName} > {post.TopicName} > #{post.Index} ({post.Id}) at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author}";
+            var source = $"{post.ForumName} > {post.TopicName} > #{post.Index} ({post.Id}) at {post.Date:T} on {post.Date:D} by {post.Author}";
             var errors = await Storage.ExecuteScalarAsync("SELECT COUNT(*) FROM Errors WHERE Source = @Param0", source) as long?;
             if (errors.Value < MaxEmailErrors)
             {
@@ -247,16 +251,14 @@ namespace ForumScanner
         public async Task SendEmail(MimeMessage message)
         {
             var logger = Debug ? new ProtocolLogger(Console.OpenStandardOutput()) : (IProtocolLogger)new NullProtocolLogger();
-            using (var smtp = new SmtpClient(logger))
+            using var smtp = new SmtpClient(logger);
+            await smtp.ConnectAsync(Configuration["Email:SmtpServer"], int.Parse(Configuration["Email:SmtpPort"] ?? "587"));
+            if (Configuration["Email:SmtpUsername"] != null)
             {
-                await smtp.ConnectAsync(Configuration["Email:SmtpServer"], int.Parse(Configuration["Email:SmtpPort"] ?? "587"));
-                if (Configuration["Email:SmtpUsername"] != null)
-                {
-                    await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
-                }
-                await smtp.SendAsync(message);
-                await smtp.DisconnectAsync(true);
+                await smtp.AuthenticateAsync(Configuration["Email:SmtpUsername"], Configuration["Email:SmtpPassword"]);
             }
+            await smtp.SendAsync(message);
+            await smtp.DisconnectAsync(true);
         }
 
         const float SecondsToMilliseconds = 1000;
@@ -281,34 +283,29 @@ namespace ForumScanner
             var updated = GetHtmlValue(htmlItem, Configuration.GetSection($"{type}s:Updated"));
             var idUrlPattern = IdUrlPattern[type];
             var idIdPattern = IdIdPattern[type];
-            var idString = (idUrlPattern != null ? idUrlPattern.Match(link) : idIdPattern.Match(htmlItem.Attributes["id"].Value))?.Groups?[1]?.Value;
-            if (idString == null) throw new InvalidDataException($"Cannot find ID for {type}");
+            var idString = ((idUrlPattern != null ? idUrlPattern.Match(link) : idIdPattern.Match(htmlItem.Attributes["id"].Value))?.Groups?[1]?.Value) ?? throw new InvalidDataException($"Cannot find ID for {type}");
             if (!int.TryParse(idString, out var id)) throw new InvalidDataException($"Cannot parse ID for {type}");
             var uniqueId = $"{Configuration.Key}/{id}";
 
             var lastUpdated = await Storage.ExecuteScalarAsync($"SELECT Updated FROM {type}s WHERE {type}Id = @Param0", uniqueId) as string;
             if (updated == lastUpdated) return null;
 
-            switch (type)
+            return type switch
             {
-                case ForumItemType.Forum:
-                case ForumItemType.Topic:
-                    return new ForumItem(type, uniqueId, link, updated);
-                case ForumItemType.Post:
-                    return new ForumPostItem(
-                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
-                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
-                        uniqueId,
-                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
-                        GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
-                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
-                        GetHtmlValue<DateTimeOffset>(htmlItem, Configuration.GetSection("Posts:Date")),
-                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Author")),
-                        GetHtmlValue<HtmlNode>(htmlItem, Configuration.GetSection("Posts:Body"))
-                    );
-                default:
-                    throw new InvalidDataException($"Unknown type {type} in CheckItemIsUpdated");
-            }
+                ForumItemType.Forum or ForumItemType.Topic => new ForumItem(type, uniqueId, link, updated),
+                ForumItemType.Post => new ForumPostItem(
+                                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:ForumName")),
+                                        GetHtmlValue(htmlItem.OwnerDocument.DocumentNode, Configuration.GetSection("Posts:TopicName")),
+                                        uniqueId,
+                                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Link")),
+                                        GetHtmlValue<int>(htmlItem, Configuration.GetSection("Posts:Index")),
+                                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:ReplyLink")),
+                                        GetHtmlValue<DateTimeOffset>(htmlItem, Configuration.GetSection("Posts:Date")),
+                                        GetHtmlValue(htmlItem, Configuration.GetSection("Posts:Author")),
+                                        GetHtmlValue<HtmlNode>(htmlItem, Configuration.GetSection("Posts:Body"))
+                                    ),
+                _ => throw new InvalidDataException($"Unknown type {type} in CheckItemIsUpdated"),
+            };
         }
 
         async Task<bool> SetItemUpdated(ForumItem item, bool updated)
@@ -369,7 +366,7 @@ namespace ForumScanner
                         $"{FormatBodyForEmail(post.Body)}" +
                         "<div class='email-notifications-footer'>" +
                             "<hr>" +
-                            $"Post #{post.Index} at {post.Date.ToString("T")} on {post.Date.ToString("D")} by {post.Author} in {post.ForumName} (<a href='{post.ReplyLink}'>reply</a>, <a href='{post.Link}'>view in forum</a>)" +
+                            $"Post #{post.Index} at {post.Date:T} on {post.Date:D} by {post.Author} in {post.ForumName} (<a href='{post.ReplyLink}'>reply</a>, <a href='{post.Link}'>view in forum</a>)" +
                         "</div>" +
                     "</body>" +
                 "</html>";
@@ -464,14 +461,13 @@ namespace ForumScanner
 
             throw new InvalidDataException($"Missing value type for GetHtmlValue: {configuration.Path}");
         }
+
+        [GeneratedRegex(@"\s+")]
+        private static partial Regex MyRegex();
     }
 
-    public class MaximumLimitException : Exception
+    public class MaximumLimitException(string message) : Exception(message)
     {
-        public MaximumLimitException(string message)
-            : base(message)
-        {
-        }
     }
 
     public class MaximumTimeLimitException : MaximumLimitException
@@ -490,20 +486,12 @@ namespace ForumScanner
         }
     }
 
-    class ForumItem
+    class ForumItem(ForumItemType type, string id, string link, string updated)
     {
-        public ForumItemType Type { get; }
-        public string Id { get; }
-        public string Link { get; protected set; }
-        public string Updated { get; }
-
-        public ForumItem(ForumItemType type, string id, string link, string updated)
-        {
-            Type = type;
-            Id = id;
-            Link = link;
-            Updated = updated;
-        }
+        public ForumItemType Type { get; } = type;
+        public string Id { get; } = id;
+        public string Link { get; protected set; } = link;
+        public string Updated { get; } = updated;
 
         override public string ToString()
         {
@@ -511,27 +499,15 @@ namespace ForumScanner
         }
     }
 
-    class ForumPostItem : ForumItem
+    class ForumPostItem(string forumName, string topicName, string id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body) : ForumItem(ForumItemType.Post, id, link, "")
     {
-        public string ForumName { get; }
-        public string TopicName { get; }
-        public string ReplyLink { get; protected set; }
-        public int Index { get; }
-        public DateTimeOffset Date { get; }
-        public string Author { get; }
-        public HtmlNode Body { get; }
-
-        public ForumPostItem(string forumName, string topicName, string id, string link, int index, string replyLink, DateTimeOffset date, string author, HtmlNode body)
-            : base(ForumItemType.Post, id, link, "")
-        {
-            ForumName = forumName;
-            TopicName = topicName;
-            ReplyLink = replyLink;
-            Index = index;
-            Date = date;
-            Author = author;
-            Body = body;
-        }
+        public string ForumName { get; } = forumName;
+        public string TopicName { get; } = topicName;
+        public string ReplyLink { get; protected set; } = replyLink;
+        public int Index { get; } = index;
+        public DateTimeOffset Date { get; } = date;
+        public string Author { get; } = author;
+        public HtmlNode Body { get; } = body;
 
         public void ApplyTemplate(Func<string, string> templater)
         {
