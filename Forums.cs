@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -72,6 +73,7 @@ namespace ForumScanner
             try
             {
                 await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl"], ""));
+                if (Configuration["RootUrl2"] != null) await ProcessForum(new ForumItem(ForumItemType.Forum, Configuration.Key, Configuration["RootUrl2"], ""));
             }
             catch (MaximumLimitException error)
             {
@@ -233,6 +235,11 @@ namespace ForumScanner
                     await Storage.ExecuteNonQueryAsync("INSERT INTO Errors (Source, Date, Error) VALUES (@Param0, @Param1, @Param2)", source, DateTimeOffset.Now, error.ToString());
                 }
             }
+            else
+            {
+                // This is to avoid indefinitely trying to process this post, which can never succeed as we've already reached the retry limit
+                updated = true;
+            }
 
             return await SetItemUpdated(post, updated);
         }
@@ -253,13 +260,13 @@ namespace ForumScanner
         }
 
         const float SecondsToMilliseconds = 1000;
-        const float MaxBandwidthBytesPerSec = 100000 / 8;
+        const float MaxBandwidthBytesPerSec = 256000 / 8;
 
         async Task<HtmlDocument> LoadItem(ForumItem item)
         {
             var response = await Client.GetAsync(item.Link);
 
-            // Limit maximum throughput to 100 Kbps by delaying based on content length.
+            // Limit maximum throughput to 256 Kbps by delaying based on content length.
             var wait = (int)(SecondsToMilliseconds * response.Content.Headers.ContentLength.Value / MaxBandwidthBytesPerSec);
             await Task.Delay(wait);
 
@@ -407,6 +414,8 @@ namespace ForumScanner
         {
             var value = GetHtmlValue(node, configuration);
             var format = configuration["Format"];
+            var formatYesterday = configuration["Format:Yesterday"];
+            var formatToday = configuration["Format:Today"];
             switch (typeof(T).FullName)
             {
                 case "HtmlAgilityPack.HtmlNode":
@@ -414,7 +423,9 @@ namespace ForumScanner
                     document.LoadHtml(value);
                     return (T)(object)document.DocumentNode;
                 case "System.DateTimeOffset":
-                    if (format != null) return (T)(object)DateTimeOffset.ParseExact(value, format, null);
+                    if (formatToday != null && DateTimeOffset.TryParseExact(value, formatToday, null, DateTimeStyles.None, out var f1)) return (T)(object)f1;
+                    if (formatYesterday != null && DateTimeOffset.TryParseExact(value, formatYesterday, null, DateTimeStyles.None, out var f2)) return (T)(object)f2.AddDays(-1);
+                    if (format != null && DateTimeOffset.TryParseExact(value, format, null, DateTimeStyles.None, out var f3)) return (T)(object)f3;
                     return (T)(object)DateTimeOffset.Parse(value);
                 case "System.Int32":
                     return (T)(object)int.Parse(value.Replace("#", ""));
